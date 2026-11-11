@@ -1,0 +1,19 @@
+"use client";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { saveDirectoryAction, deleteDirectoryAction } from "@/actions/administration";
+
+export function DirectoryEditor({ kind, record }: { kind: "vendor" | "department"; record?: { id: string; name: string; website?: string; contact?: string; description?: string } }) {
+  const [mode, setMode] = useState<"edit" | "delete" | null>(null);
+  const [error, setError] = useState("");
+  const [pending, startTransition] = useTransition();
+  const router = useRouter();
+  function open(next: "edit" | "delete") { setError(""); setMode(next); }
+  return <><div className="flex items-center gap-1">{record ? <><Button variant="ghost" size="icon-sm" aria-label={`Edit ${record.name}`} onClick={() => open("edit")}><Pencil size={14} /></Button><Button variant="ghost" size="icon-sm" aria-label={`Delete ${record.name}`} onClick={() => open("delete")}><Trash2 size={14} /></Button></> : <Button onClick={() => open("edit")}><Plus size={15} />Add {kind}</Button>}</div><Dialog open={mode !== null} onOpenChange={open => { if (!open && !pending) setMode(null); }}><DialogContent><DialogHeader><DialogTitle>{mode === "delete" ? `Delete ${record?.name}?` : `${record ? "Edit" : "Add"} ${kind}`}</DialogTitle><DialogDescription>{mode === "delete" ? "Only entries with no linked licenses can be deleted." : `Keep your ${kind} directory up to date.`}</DialogDescription></DialogHeader>{error && <p role="alert" className="form-error">{error}</p>}{mode === "delete" ? <DialogFooter><Button variant="outline" onClick={() => setMode(null)} disabled={pending}>Cancel</Button><Button variant="destructive" disabled={pending} onClick={() => startTransition(async () => { const result = await deleteDirectoryAction(kind, record!.id); if (!result.success) setError(result.error); else { setMode(null); router.refresh(); } })}>{pending && <LoaderCircle className="animate-spin" size={14} />}Delete {kind}</Button></DialogFooter> : <form onSubmit={event => {
+    event.preventDefault(); const input = Object.fromEntries(new FormData(event.currentTarget));
+    startTransition(async () => { const result = await saveDirectoryAction(kind, input, record?.id); if (!result.success) setError(result.error); else { setMode(null); router.refresh(); } });
+  }}><fieldset disabled={pending} className="flex flex-col gap-4 border-0"><div className="form-field"><label htmlFor="directory-name">Name *</label><input id="directory-name" name="name" className="field-input" required minLength={2} maxLength={120} defaultValue={record?.name} /></div>{kind === "vendor" ? <><div className="form-field"><label htmlFor="website">Website</label><input id="website" name="website" className="field-input" type="url" placeholder="https://example.com" defaultValue={record?.website} /></div><div className="form-field"><label htmlFor="contact">Contact information</label><input id="contact" name="contact" className="field-input" maxLength={200} defaultValue={record?.contact} /></div></> : <div className="form-field"><label htmlFor="description">Description</label><textarea id="description" name="description" className="field-input" maxLength={500} defaultValue={record?.description} /></div>}</fieldset><DialogFooter className="mt-6"><Button type="button" variant="outline" onClick={() => setMode(null)} disabled={pending}>Cancel</Button><Button type="submit" disabled={pending}>{pending && <LoaderCircle className="animate-spin" size={14} />}Save {kind}</Button></DialogFooter></form>}</DialogContent></Dialog></>;
+}

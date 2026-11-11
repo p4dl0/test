@@ -1,0 +1,7 @@
+import type { Prisma } from "@/generated/prisma/client";
+import { Activity } from "lucide-react";
+export const ACTION_LABELS: Record<string, string> = { CREATED: "License created", EDITED: "License edited", DELETED: "License deleted", EXPIRATION_CHANGED: "Expiration date changed", SEATS_CHANGED: "Seat count changed", COST_CHANGED: "Cost changed", KEY_CHANGED: "License key changed", KEY_REVEALED: "License key revealed" };
+type Event = { id: string; action: string; timestamp: Date; user: { name: string }; previousValue: Prisma.JsonValue; newValue: Prisma.JsonValue; productName: string };
+export function AuditTimeline({ events, timezone }: { events: Event[]; timezone: string }) {
+  return <div className="audit-timeline">{events.map(event => <div key={event.id} className="timeline-event"><span className="timeline-icon"><Activity size={14} /></span><div><strong>{ACTION_LABELS[event.action] ?? event.action}</strong><p>{event.user.name} <span>·</span> {new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: timezone }).format(event.timestamp)}</p>{(event.previousValue || event.newValue) && <details><summary>View change details</summary><div className="audit-values">{event.previousValue && <div><small>Previous value</small><pre>{JSON.stringify(event.previousValue, null, 2)}</pre></div>}{event.newValue && <div><small>New value</small><pre>{JSON.stringify(event.newValue, null, 2)}</pre></div>}</div></details>}</div></div>)}{!events.length && <p className="muted">No changes recorded yet.</p>}</div>;
+}

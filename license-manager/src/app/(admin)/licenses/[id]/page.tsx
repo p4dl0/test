@@ -1,0 +1,25 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft, CalendarClock, CircleCheck, RefreshCw, Wallet } from "lucide-react";
+import { PageHeader, Card, ProductIcon, StatusBadge, UtilizationBar, ExpirationLabel } from "@/components/shared";
+import { KeyReveal } from "@/components/licenses/key-reveal";
+import { LicenseActions } from "@/components/licenses/license-actions";
+import { AuditTimeline } from "@/components/audit-timeline";
+import { getLicense, getSettings } from "@/services/licenses";
+import { db } from "@/lib/db";
+import { displayDate, money } from "@/lib/calculations";
+export const metadata = { title: "License details" };
+export default async function LicenseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const [license, settings, events] = await Promise.all([getLicense(id), getSettings(), db.auditLog.findMany({ where: { licenseId: id }, include: { user: true }, orderBy: { timestamp: "desc" }, take: 30 })]);
+  if (!license) notFound();
+  const info = (label: string, value: React.ReactNode) => <div><dt>{label}</dt><dd>{value || "—"}</dd></div>;
+  return <><Link href="/licenses" className="back-link"><ArrowLeft size={15} />All licenses</Link><PageHeader title={license.productName} description={`${license.vendor.name} · ${license.licenseType}`}><LicenseActions id={id} name={license.productName} version={license.version} detail /></PageHeader>
+    <div className="detail-summary"><div className="panel detail-stat"><span className="stat-icon green"><CircleCheck size={20} /></span><div><small>Current status</small><StatusBadge status={license.status} /></div></div><div className="panel detail-stat"><span className="stat-icon amber"><CalendarClock size={20} /></span><div><small>Expiration</small><strong>{displayDate(license.expirationDate)}</strong><ExpirationLabel days={license.days} /></div></div><div className="panel detail-stat"><span className="stat-icon blue"><Wallet size={20} /></span><div><small>Annual commitment</small><strong>{money(license.annualCostMinor, license.currency)}</strong><span className="muted text-xs">{money(license.annualCostMinor / 12, license.currency)} / month</span></div></div></div>
+    <div className="detail-grid"><div className="stack"><Card title="Product information"><dl className="details-list">{info("Product", <span className="inline-flex items-center gap-2"><ProductIcon name={license.vendor.name} />{license.productName}</span>)}{info("License ID", <code className="text-xs break-all">{id}</code>)}{info("Vendor", license.vendor.name)}{info("License type", license.licenseType)}{info("License identifier", <KeyReveal id={id} suffix={license.keySuffix} />)}{info("Department", license.department.name)}{info("Responsible person", <div>{license.responsibleUser.name}<small className="block muted">{license.responsibleUser.email}</small></div>)}</dl></Card>
+    <Card title="License utilization" description="Understand how your purchased seats are allocated."><div className="panel-body"><UtilizationBar purchased={license.purchasedSeats} assigned={license.assignedSeats} tracked={license.seatTracking} />{license.seatTracking && <div className="seat-summary"><div><strong>{license.purchasedSeats}</strong><span>Purchased</span></div><div><strong>{license.assignedSeats}</strong><span>Assigned</span></div><div><strong>{license.purchasedSeats - license.assignedSeats}</strong><span>Available</span></div></div>}</div></Card>
+    <Card title="Notes"><div className="panel-body notes-text">{license.notes || <span className="muted">No notes added.</span>}</div></Card>
+    <Card title="Change history" description="Every change is recorded with its actor and previous values." href={`/audit-log?license=${id}`}><AuditTimeline events={events} timezone={settings.timezone} /></Card></div>
+    <div className="stack"><Card title="Renewal & dates"><dl className="details-list">{info("Purchase date", displayDate(license.purchaseDate))}{info("Start date", displayDate(license.startDate))}{info("Expiration date", displayDate(license.expirationDate))}{info("Renewal date", license.renewalDate ? displayDate(license.renewalDate) : "Not scheduled")}{info("Auto-renewal", <span className="inline-flex items-center gap-2"><RefreshCw size={14} />{license.autoRenewal ? "Enabled" : "Disabled"}</span>)}</dl></Card><Card title="Financial & contract"><dl className="details-list">{info("Annual cost", money(license.annualCostMinor, license.currency))}{info("Monthly equivalent", money(license.annualCostMinor / 12, license.currency))}{info("Currency", license.currency)}{info("Supplier / reseller", license.supplier)}{info("Contract number", license.contractNumber)}</dl></Card><div className="info-note"><CalendarClock size={19} /><div><strong>Stay ahead of renewals</strong><p>Reminders are generated at 90, 60, 30, 14, 7, and 1 day before expiration.</p><Link href="/notifications">View notifications →</Link></div></div></div></div>
+  </>;
+}

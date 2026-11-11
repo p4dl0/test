@@ -1,0 +1,1 @@
+export default function Loading() { return <div className="loading-page" role="status" aria-label="Loading page"><div className="skeleton h-9 w-64" /><div className="skeleton mt-4 h-5 w-96 max-w-full" /><div className="summary-grid mt-8">{Array.from({ length: 6 }, (_, i) => <div className="skeleton h-32" key={i} />)}</div><div className="skeleton mt-6 h-96" /></div>; }

@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model License {
+  id                String   @id @default(cuid())
+  productName       String
+  vendorId          String
+  vendor            Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  licenseType       String
+  encryptedKey      String?
+  keySuffix         String?
+  seatTracking      Boolean  @default(true)
+  purchasedSeats    Int      @default(1)
+  assignedSeats     Int      @default(0)
+  purchaseDate      String
+  startDate         String
+  expirationDate    String
+  renewalDate       String?
+  autoRenewal       Boolean  @default(false)
+  annualCostMinor   Int      @default(0)
+  currency          String   @default("EUR")
+  departmentId      String
+  department        Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  responsibleUserId String
+  responsibleUser   User     @relation(fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  supplier          String   @default("")
+  contractNumber    String   @default("")
+  notes             String   @default("")
+  version           Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+
+  @@index([expirationDate])
+  @@index([vendorId])
+  @@index([departmentId])
+  @@index([responsibleUserId])
+  @@index([licenseType])
+}
+
+model Vendor {
+  id       String @id @default(cuid())
+  name     String @unique
+  website  String @default("")
+  contact  String @default("")
+  licenses License[]
+}
+
+model Department {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String @default("")
+  licenses    License[]
+  users       User[]
+}
+
+model User {
+  id            String @id @default(cuid())
+  name          String
+  email         String @unique
+  departmentId  String?
+  department    Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  licenses      License[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+}
+
+model Notification {
+  id             String @id @default(cuid())
+  licenseId      String?
+  license        License? @relation(fields: [licenseId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  threshold      Int
+  expirationDate String
+  productName    String
+  message        String
+  dedupeKey      String @unique
+  createdAt      DateTime @default(now())
+  readAt         DateTime?
+
+  @@index([userId, readAt])
+}
+
+model AuditLog {
+  id           String @id @default(cuid())
+  licenseId    String?
+  license      License? @relation(fields: [licenseId], references: [id], onDelete: SetNull)
+  productName  String
+  action       String
+  timestamp    DateTime @default(now())
+  userId       String
+  user         User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  previousValue Json?
+  newValue      Json?
+
+  @@index([licenseId, timestamp])
+  @@index([action, timestamp])
+}
+
+model AppSettings {
+  id                   String @id @default("organization")
+  organizationName     String @default("Northstar Health Group")
+  timezone             String @default("Europe/Riga")
+  defaultCurrency      String @default("EUR")
+  notificationsEnabled Boolean @default(true)
+}

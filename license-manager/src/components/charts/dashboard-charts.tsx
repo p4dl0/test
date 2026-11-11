@@ -1,0 +1,27 @@
+"use client";
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { money } from "@/lib/calculations";
+type Datum = { name: string; value: number };
+const colors = ["#53b797", "#e6c05a", "#eda168", "#e67d84"];
+const axis = { fontSize: 9, fill: "#9aa5b7" };
+
+function ChartTooltip({ active, payload, label, currency }: { active?: boolean; payload?: readonly { value?: number | string; name?: string; payload?: { period?: string; name?: string } }[]; label?: string | number; currency?: string }) {
+  if (!active || !payload?.length) return null;
+  return <div className="chart-tooltip"><strong>{payload[0].payload?.period ?? label ?? payload[0].payload?.name}</strong>{currency ? money(Number(payload[0].value), currency) : `${payload[0].value} licenses`}</div>;
+}
+export function CostChart({ data, currency }: { data: Datum[]; currency: string }) {
+  return <div className="chart-container" role="img" aria-label="Monthly projected license commitments"><ResponsiveContainer width="100%" height="100%" minWidth={0}><AreaChart data={data} margin={{ top: 14, right: 10, left: 0, bottom: 0 }}><defs><linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6f98ed" stopOpacity={.22} /><stop offset="100%" stopColor="#6f98ed" stopOpacity={.015} /></linearGradient></defs><CartesianGrid strokeDasharray="3 4" vertical={false} stroke="#edf0f6" /><XAxis dataKey="name" tick={axis} axisLine={false} tickLine={false} dy={8} /><YAxis tick={axis} axisLine={false} tickLine={false} tickFormatter={value => money(Number(value), currency, true)} width={60} /><Tooltip content={<ChartTooltip currency={currency} />} /><Area isAnimationActive={false} type="monotone" dataKey="value" stroke="#638bec" strokeWidth={2.5} fill="url(#costFill)" activeDot={{ r: 4, stroke: "white", strokeWidth: 2 }} /></AreaChart></ResponsiveContainer></div>;
+}
+export function StatusChart({ data }: { data: Datum[] }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  return <><div className="donut-wrap" role="img" aria-label={data.map(item => `${item.name}: ${item.value}`).join(", ")}><ResponsiveContainer width="100%" height="100%" minWidth={0}><PieChart><Pie isAnimationActive={false} data={total ? data : [{ name: "No licenses", value: 1 }]} dataKey="value" nameKey="name" innerRadius={57} outerRadius={75} paddingAngle={total ? 4 : 0} cornerRadius={3} stroke="none">{(total ? data : [{ name: "empty" }]).map((item, index) => <Cell key={item.name} fill={total ? colors[index] : "#edf1f7"} />)}</Pie><Tooltip content={<ChartTooltip />} /></PieChart></ResponsiveContainer><div className="donut-center"><strong>{total}</strong><span>Total licenses</span></div></div><div className="status-legend">{data.map((item, index) => <div key={item.name}><i style={{ background: colors[index] }} /><span>{item.name}</span><strong>{item.value}</strong></div>)}</div></>;
+}
+export function VendorChart({ data }: { data: Datum[] }) {
+  return <div className="chart-container short-chart" role="img" aria-label="License counts by vendor"><ResponsiveContainer width="100%" height="100%" minWidth={0}><BarChart data={data} layout="vertical" margin={{ top: 0, right: 30, left: 15, bottom: 0 }}><CartesianGrid horizontal={false} strokeDasharray="3 4" stroke="#edf0f6" /><XAxis type="number" tick={axis} axisLine={false} tickLine={false} allowDecimals={false} /><YAxis type="category" dataKey="name" tick={{ ...axis, fill: "#8190a7" }} width={88} axisLine={false} tickLine={false} /><Tooltip content={<ChartTooltip />} cursor={{ fill: "#f7f9fd" }} /><Bar isAnimationActive={false} dataKey="value" fill="#7c9fee" radius={[0, 4, 4, 0]} barSize={13} /></BarChart></ResponsiveContainer></div>;
+}
+export function ExpirationChart({ data }: { data: Datum[] }) {
+  return <div className="chart-container short-chart" role="img" aria-label="Upcoming expiration counts by month"><ResponsiveContainer width="100%" height="100%" minWidth={0}><BarChart data={data} margin={{ top: 8, right: 15, left: -15, bottom: 0 }}><CartesianGrid vertical={false} strokeDasharray="3 4" stroke="#edf0f6" /><XAxis dataKey="name" tick={axis} tickLine={false} axisLine={false} dy={6} /><YAxis tick={axis} tickLine={false} axisLine={false} allowDecimals={false} /><Tooltip content={<ChartTooltip />} cursor={{ fill: "#f7f9fd" }} /><Bar isAnimationActive={false} dataKey="value" radius={[4, 4, 0, 0]} barSize={29}>{data.map((item, i) => <Cell key={item.name} fill={i < 2 ? "#e9b77c" : "#92adea"} />)}</Bar></BarChart></ResponsiveContainer></div>;
+}
+export function FinancialBarChart({ data, currency }: { data: Datum[]; currency: string }) {
+  return <div className="chart-container" style={{ height: Math.max(240, data.length * 32) }} role="img" aria-label="Annual cost breakdown"><ResponsiveContainer width="100%" height="100%" minWidth={0}><BarChart data={data} layout="vertical" margin={{ top: 5, right: 25, left: 20, bottom: 0 }}><CartesianGrid horizontal={false} strokeDasharray="3 4" stroke="#edf0f6" /><XAxis type="number" tick={axis} axisLine={false} tickLine={false} tickFormatter={value => money(Number(value), currency, true)} /><YAxis type="category" dataKey="name" tick={axis} width={100} axisLine={false} tickLine={false} /><Tooltip content={<ChartTooltip currency={currency} />} cursor={{ fill: "#f7f9fd" }} /><Bar isAnimationActive={false} dataKey="value" fill="#86a6ee" radius={[0, 4, 4, 0]} barSize={15} /></BarChart></ResponsiveContainer></div>;
+}
