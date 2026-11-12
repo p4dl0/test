@@ -7,7 +7,8 @@ import { generateNotifications } from "@/services/notifications";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const [actor, settings] = await Promise.all([currentActor(), getSettings()]);
+  const actor = await currentActor();
+  const settings = await getSettings();
   await generateNotifications();
   const unread = await db.notification.count({ where: { userId: actor.id, readAt: null } });
   return <AppShell user={{ name: actor.name, email: actor.email }} organization={settings.organizationName} unread={unread}>{children}</AppShell>;

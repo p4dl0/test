@@ -15,7 +15,8 @@
     "db:setup": "node scripts/setup-env.mjs && prisma generate && prisma migrate deploy && prisma db seed",
     "test": "node scripts/test.mjs",
     "notifications:run": "node --conditions=react-server --import=tsx scripts/run-notifications.ts",
-    "test:e2e": "node scripts/test-browser.mjs"
+    "test:e2e": "node scripts/test-browser.mjs",
+    "auth:setup": "node --conditions=react-server --import=tsx scripts/setup-admin.ts"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.10.1",

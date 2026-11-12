@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { getSettings } from "@/services/licenses";
 export const metadata = { title: "Notifications" };
 export default async function NotificationsPage({ searchParams }: { searchParams: Promise<{ view?: string; page?: string }> }) {
+  await currentActor();
   await generateNotifications();
   const [actor, filters, settings] = await Promise.all([currentActor(), searchParams, getSettings()]);
   const where = { userId: actor.id, ...(filters.view === "unread" ? { readAt: null } : {}) };

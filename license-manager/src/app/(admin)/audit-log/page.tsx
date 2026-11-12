@@ -1,3 +1,4 @@
+import { currentActor } from "@/lib/actor";
 import Link from "next/link";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { ACTION_LABELS, AuditTimeline } from "@/components/audit-timeline";
@@ -7,6 +8,7 @@ import { getSettings } from "@/services/licenses";
 import type { Prisma } from "@/generated/prisma/client";
 export const metadata = { title: "Audit Log" };
 export default async function AuditLogPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
+  await currentActor();
   const filters = await searchParams;
   const validDate = (value: string | undefined) => value && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) ? value : undefined;
   const from = validDate(filters.from), to = validDate(filters.to);

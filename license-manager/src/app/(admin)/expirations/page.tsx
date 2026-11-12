@@ -1,3 +1,4 @@
+import { currentActor } from "@/lib/actor";
 import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { PageHeader, ProductIcon, StatusBadge, ExpirationLabel, EmptyState } from "@/components/shared";
@@ -6,6 +7,7 @@ import { displayDate, expirationGroup, money } from "@/lib/calculations";
 export const metadata = { title: "Expirations" };
 const groups = ["Expired", "Next 7 days", "Next 30 days", "Next 60 days", "Next 90 days", "Later"];
 export default async function ExpirationsPage() {
+  await currentActor();
   const { licenses } = await listLicenses({ sort: "expirationDate" }, false);
   return <><PageHeader eyebrow="RENEWAL PLANNING" title="Expirations" description="Stay ahead of deadlines and keep your organization covered." /><div className="expirations-tabs">{groups.map((group, index) => <a className="panel expiration-tab" href={`#group-${index}`} key={group}><span>{group}</span><strong className={index === 0 ? "text-red" : index <= 2 ? "text-orange" : ""}>{licenses.filter(license => expirationGroup(license.days) === group).length}</strong></a>)}</div><div className="stack">{groups.map((group, index) => {
     const items = licenses.filter(license => expirationGroup(license.days) === group);

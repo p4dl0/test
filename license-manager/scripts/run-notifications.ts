@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { generateNotifications } from "../src/services/notifications";
+import { runNotificationJob } from "../src/services/notification-job";
 import { db } from "../src/lib/db";
-try { console.log(await generateNotifications()); }
+try { console.log(await runNotificationJob()); }
 finally { await db.$disconnect(); }

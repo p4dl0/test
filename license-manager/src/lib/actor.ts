@@ -1,9 +1,15 @@
 import "server-only";
-import { db } from "@/lib/db";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { sessionActor, sessionCookie } from "@/lib/security/sessions";
 
-// Explicit local-demo identity boundary. Replace with a verified session before network deployment.
+export async function authenticatedActor() {
+  return sessionActor((await cookies()).get(sessionCookie().name)?.value);
+}
+
+// An AdminCredential is the authorization grant; directory users have no access.
 export async function currentActor() {
-  const actor = await db.user.findUnique({ where: { email: process.env.DEMO_USER_EMAIL ?? "admin@example.test" } });
-  if (!actor) throw new Error("Administrator not found. Initialize the database first.");
+  const actor = await authenticatedActor();
+  if (!actor) redirect("/login");
   return actor;
 }

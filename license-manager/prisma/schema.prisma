@@ -70,6 +70,31 @@ model User {
   licenses      License[]
   notifications Notification[]
   auditLogs     AuditLog[]
+  adminCredential AdminCredential?
+}
+
+// Only explicitly provisioned users may administer the workspace.
+model AdminCredential {
+  userId       String @id
+  user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  passwordHash String
+  sessions     AdminSession[]
+}
+
+model AdminSession {
+  tokenHash String @id
+  adminId   String
+  admin     AdminCredential @relation(fields: [adminId], references: [userId], onDelete: Cascade)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+// Shared, persistent login budget; never trust a caller-supplied IP header.
+model LoginThrottle {
+  id        String @id
+  startedAt DateTime
+  attempts  Int @default(0)
 }
 
 model Notification {

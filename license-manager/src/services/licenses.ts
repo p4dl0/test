@@ -2,11 +2,12 @@ import "server-only";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/actor";
 import { encryptKey, decryptKey } from "@/lib/security/keys";
-import { licenseSchema } from "@/lib/validation/license";
+import { licenseSchema, type LicenseInput } from "@/lib/validation/license";
 import { addDays, daysRemaining, licenseStatus, todayInTimezone, utilization } from "@/lib/calculations";
 import type { License, Prisma } from "@/generated/prisma/client";
 
 export async function getSettings() {
+  await currentActor();
   return db.appSettings.findUniqueOrThrow({ where: { id: "organization" } });
 }
 export async function organizationToday() { return todayInTimezone((await getSettings()).timezone); }
@@ -17,21 +18,24 @@ function snapshot(license: License): Prisma.InputJsonObject {
   return { ...safe, createdAt: createdAt.toISOString(), updatedAt: updatedAt.toISOString() };
 }
 
-export async function createLicense(input: unknown) {
-  const data = licenseSchema.parse(input);
-  const actor = await currentActor();
+// Shared by the authenticated form and atomic CSV import.
+export async function insertLicense(tx: Prisma.TransactionClient, data: LicenseInput, actorId: string) {
   const { licenseKey, clearKey: _clear, ...fields } = data;
   void _clear;
-  return db.$transaction(async tx => {
-    const license = await tx.license.create({ data: { ...fields, encryptedKey: licenseKey ? encryptKey(licenseKey) : null, keySuffix: licenseKey ? licenseKey.slice(-5).padStart(5, "X") : null } });
-    await tx.auditLog.create({ data: { licenseId: license.id, productName: license.productName, action: "CREATED", userId: actor.id, newValue: snapshot(license) } });
-    return { id: license.id };
-  });
+  const license = await tx.license.create({ data: { ...fields, encryptedKey: licenseKey ? encryptKey(licenseKey) : null, keySuffix: licenseKey ? licenseKey.slice(-5).padStart(5, "X") : null } });
+  await tx.auditLog.create({ data: { licenseId: license.id, productName: license.productName, action: "CREATED", userId: actorId, newValue: snapshot(license) } });
+  return { id: license.id };
+}
+
+export async function createLicense(input: unknown) {
+  const actor = await currentActor();
+  const data = licenseSchema.parse(input);
+  return db.$transaction(tx => insertLicense(tx, data, actor.id));
 }
 
 export async function updateLicense(id: string, expectedVersion: number, input: unknown) {
-  const data = licenseSchema.parse(input);
   const actor = await currentActor();
+  const data = licenseSchema.parse(input);
   const { licenseKey, clearKey, ...fields } = data;
   return db.$transaction(async tx => {
     const before = await tx.license.findUniqueOrThrow({ where: { id } });
@@ -74,6 +78,7 @@ export async function revealLicenseKey(id: string) {
 const relations = { vendor: true, department: true, responsibleUser: true } as const;
 const safeOmit = { encryptedKey: true } as const;
 export async function getLicense(id: string) {
+  await currentActor();
   const license = await db.license.findUnique({ where: { id }, include: relations, omit: safeOmit });
   if (!license) return null;
   const days = daysRemaining(license.expirationDate, await organizationToday());
@@ -113,6 +118,7 @@ export function licenseWhere(filters: LicenseFilters, today: string): Prisma.Lic
 }
 
 export async function listLicenses(filters: LicenseFilters = {}, paginate = true) {
+  await currentActor();
   const today = await organizationToday();
   const where = licenseWhere(filters, today);
   const sort = filters.sort ?? "productName";
@@ -134,6 +140,7 @@ export async function listLicenses(filters: LicenseFilters = {}, paginate = true
 }
 
 export async function lookups() {
+  await currentActor();
   const [vendors, departments, users] = await Promise.all([
     db.vendor.findMany({ orderBy: { name: "asc" } }), db.department.findMany({ orderBy: { name: "asc" } }), db.user.findMany({ orderBy: { name: "asc" } }),
   ]);

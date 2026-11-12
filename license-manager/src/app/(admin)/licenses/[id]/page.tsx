@@ -1,3 +1,4 @@
+import { currentActor } from "@/lib/actor";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, CalendarClock, CircleCheck, RefreshCw, Wallet } from "lucide-react";
@@ -10,6 +11,7 @@ import { db } from "@/lib/db";
 import { displayDate, money } from "@/lib/calculations";
 export const metadata = { title: "License details" };
 export default async function LicenseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await currentActor();
   const { id } = await params;
   const [license, settings, events] = await Promise.all([getLicense(id), getSettings(), db.auditLog.findMany({ where: { licenseId: id }, include: { user: true }, orderBy: { timestamp: "desc" }, take: 30 })]);
   if (!license) notFound();

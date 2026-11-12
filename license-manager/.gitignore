@@ -45,3 +45,6 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 !.env.example
+
+# Generated administrator credentials
+/.admin-credentials

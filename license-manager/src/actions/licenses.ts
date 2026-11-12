@@ -1,5 +1,6 @@
 "use server";
 
+import { currentActor } from "@/lib/actor";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createLicense, updateLicense, deleteLicense, revealLicenseKey } from "@/services/licenses";
@@ -16,6 +17,7 @@ function failure(error: unknown): ActionResult<never> {
   return { success: false, error: "The operation could not be completed. Check the selected records and try again." };
 }
 export async function saveLicenseAction(input: unknown, id?: string, version?: number): Promise<ActionResult> {
+  await currentActor();
   try {
     const data = id ? await updateLicense(id, z.number().int().positive().parse(version), input) : await createLicense(input);
     invalidate(data.id);
@@ -23,6 +25,7 @@ export async function saveLicenseAction(input: unknown, id?: string, version?: n
   } catch (error) { return failure(error); }
 }
 export async function deleteLicenseAction(id: string, version: number): Promise<ActionResult> {
+  await currentActor();
   try {
     await deleteLicense(z.string().min(1).parse(id), z.number().int().positive().parse(version));
     invalidate(id);
@@ -30,6 +33,7 @@ export async function deleteLicenseAction(id: string, version: number): Promise<
   } catch (error) { return failure(error); }
 }
 export async function revealLicenseKeyAction(id: string): Promise<ActionResult<string | null>> {
+  await currentActor();
   try {
     const data = await revealLicenseKey(z.string().min(1).parse(id));
     revalidatePath("/audit-log");

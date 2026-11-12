@@ -1,3 +1,4 @@
+import { currentActor } from "@/lib/actor";
 import Link from "next/link";
 import { ArrowRight, CircleCheck, Clock3, CreditCard, Layers, Plus, TriangleAlert, Wallet, XCircle } from "lucide-react";
 import { PageHeader, Card, ProductIcon, StatusBadge, UtilizationBar, ExpirationLabel } from "@/components/shared";
@@ -7,6 +8,7 @@ import { CostChart, ExpirationChart, StatusChart, VendorChart } from "@/componen
 import { statistics } from "@/services/statistics";
 import { displayDate, money } from "@/lib/calculations";
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ currency?: string }> }) {
+  await currentActor();
   const stats = await statistics((await searchParams).currency);
   const soon = stats.licenses.filter(license => license.days >= 0).sort((a, b) => a.days - b.days).slice(0, 5);
   const cards = [

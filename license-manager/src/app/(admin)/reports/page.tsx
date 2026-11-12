@@ -1,3 +1,4 @@
+import { currentActor } from "@/lib/actor";
 import Link from "next/link";
 import { PageHeader, Card, UtilizationBar, ProductIcon, EmptyState } from "@/components/shared";
 import { CurrencySelector } from "@/components/currency-selector";
@@ -6,6 +7,7 @@ import { statistics } from "@/services/statistics";
 import { money } from "@/lib/calculations";
 export const metadata = { title: "Reports" };
 export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ currency?: string }> }) {
+  await currentActor();
   const data = await statistics((await searchParams).currency);
   const expensive = [...data.financial].sort((a, b) => b.annualCostMinor - a.annualCostMinor).slice(0, 8);
   const usage = data.purchased ? Math.round(data.assigned / data.purchased * 100) : 0;

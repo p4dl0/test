@@ -1,5 +1,10 @@
-import { after, before, test } from "node:test";
+import { after, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { db } from "../src/lib/db";
 import { createLicense, deleteLicense, duplicateLicense, getLicense, listLicenses, revealLicenseKey, updateLicense } from "../src/services/licenses";
 import { encryptKey, decryptKey } from "../src/lib/security/keys";
@@ -7,6 +12,17 @@ import { addDays, todayInTimezone } from "../src/lib/calculations";
 import { generateNotifications, markNotificationsRead } from "../src/services/notifications";
 import { deleteDirectory, saveDirectory, saveSettings } from "../src/services/directories";
 import { statistics } from "../src/services/statistics";
+import { hashPassword, verifyPassword } from "../src/lib/security/passwords";
+import { authenticateAdmin, hashSessionToken, revokeSession, sessionActor, sessionCookie } from "../src/lib/security/sessions";
+import { currentActor } from "../src/lib/actor";
+import { getSettings, lookups } from "../src/services/licenses";
+import { setSessionToken } from "./request-context";
+import { previewLicenseImport, importLicenses } from "../src/services/license-import";
+import { CsvImportError } from "../src/lib/license-csv";
+import { csvFixture } from "./csv-fixture";
+
+const password = "test-only-password-not-for-deployment";
+let adminToken: string;
 
 const fixture = { productName: "CRUD test license", vendorId: "vendor", licenseType: "Subscription", licenseKey: "FAKE-NOT-REAL-12345", seatTracking: true, purchasedSeats: 10, assignedSeats: 7, purchaseDate: "2025-01-01", startDate: "2025-01-01", expirationDate: addDays(todayInTimezone(), 24), renewalDate: "", autoRenewal: false, annualCostMinor: 120000, currency: "EUR", departmentId: "dept", responsibleUserId: "admin", supplier: "Test reseller", contractNumber: "TEST-1", notes: "Test only" };
 before(async () => {
@@ -14,8 +30,120 @@ before(async () => {
   await db.vendor.create({ data: { id: "vendor", name: "Test vendor" } });
   await db.department.create({ data: { id: "dept", name: "Test department" } });
   await db.user.create({ data: { id: "admin", name: "Test admin", email: "admin@example.test", departmentId: "dept" } });
+  await db.adminCredential.create({ data: { userId: "admin", passwordHash: await hashPassword(password) } });
+  adminToken = (await authenticateAdmin("admin@example.test", password))!.token;
+});
+beforeEach(async () => {
+  setSessionToken(adminToken);
+  await db.loginThrottle.deleteMany();
 });
 after(() => db.$disconnect());
+
+test("anonymous callers cannot read data, reveal keys, or perform any administrative action", async () => {
+  const { id } = await createLicense(fixture);
+  const counts = await Promise.all([db.license.count(), db.auditLog.count(), db.notification.count()]);
+  setSessionToken(undefined);
+  for (const operation of [
+    () => currentActor(), () => getSettings(), () => lookups(), () => listLicenses(),
+    () => getLicense(id), () => duplicateLicense(id), () => statistics(),
+    () => revealLicenseKey(id), () => createLicense(fixture),
+    () => updateLicense(id, 1, fixture), () => deleteLicense(id, 1),
+    () => saveDirectory("vendor", { name: "Forbidden", website: "", contact: "" }),
+    () => deleteDirectory("vendor", "vendor"),
+    () => saveSettings({ organizationName: "Forbidden", timezone: "UTC", defaultCurrency: "EUR", notificationsEnabled: false }),
+    () => generateNotifications(), () => markNotificationsRead(),
+  ]) await assert.rejects(operation, /NEXT_REDIRECT/);
+  assert.deepEqual(await Promise.all([db.license.count(), db.auditLog.count(), db.notification.count()]), counts);
+  setSessionToken(adminToken);
+  await deleteLicense(id, 1);
+});
+
+test("passwords are salted and invalid credentials or directory-only users cannot log in", async () => {
+  const hash = await hashPassword(password);
+  assert.notEqual(hash, await hashPassword(password));
+  assert.equal(await verifyPassword(password, hash), true);
+  assert.equal(await verifyPassword("incorrect", hash), false);
+  assert.equal(await authenticateAdmin("admin@example.test", "incorrect"), null);
+  assert.equal(await authenticateAdmin("missing@example.test", password), null);
+  await db.user.create({ data: { id: "directory-only", name: "No login", email: "directory@example.test" } });
+  assert.equal(await authenticateAdmin("directory@example.test", password), null);
+  setSessionToken("admin");
+  await assert.rejects(currentActor(), /NEXT_REDIRECT/);
+});
+
+test("opaque sessions reject tampering, expire, revoke, and bind audits to the authenticated admin", async () => {
+  const session = (await authenticateAdmin("admin@example.test", password))!;
+  const stored = await db.adminSession.findUniqueOrThrow({ where: { tokenHash: hashSessionToken(session.token) } });
+  assert.notEqual(stored.tokenHash, session.token);
+  assert.equal((await sessionActor(session.token))?.id, "admin");
+  const forged = (session.token[0] === "0" ? "1" : "0") + session.token.slice(1);
+  assert.equal(await sessionActor(forged), null);
+  await db.adminSession.update({ where: { tokenHash: stored.tokenHash }, data: { expiresAt: new Date(Date.now() - 1) } });
+  assert.equal(await sessionActor(session.token), null);
+  const fresh = (await authenticateAdmin("admin@example.test", password))!;
+  await revokeSession(fresh.token);
+  assert.equal(await sessionActor(fresh.token), null);
+  await db.user.create({ data: { id: "second-admin", name: "Second admin", email: "second@example.test" } });
+  await db.adminCredential.create({ data: { userId: "second-admin", passwordHash: await hashPassword(password) } });
+  const second = (await authenticateAdmin("second@example.test", password))!;
+  setSessionToken(second.token);
+  const { id } = await createLicense(fixture);
+  await revealLicenseKey(id);
+  assert.equal((await db.auditLog.findFirstOrThrow({ where: { licenseId: id, action: "KEY_REVEALED" } })).userId, "second-admin");
+  await deleteLicense(id, 1);
+  await db.adminCredential.delete({ where: { userId: "second-admin" } });
+  assert.equal(await sessionActor(second.token), null);
+});
+
+test("login attempts are bounded across accounts and reset after the window", async () => {
+  for (let i = 0; i < 10; i++) assert.equal(await authenticateAdmin(`missing-${i}@example.test`, ""), null);
+  assert.equal(await authenticateAdmin("admin@example.test", password), null);
+  await db.loginThrottle.update({ where: { id: "admin-login" }, data: { startedAt: new Date(Date.now() - 16 * 60 * 1000) } });
+  assert.ok(await authenticateAdmin("admin@example.test", password));
+});
+
+test("session cookies require HTTPS for network deployments", () => {
+  const original = process.env.APP_URL;
+  try {
+    process.env.APP_URL = "https://licenses.example.test";
+    assert.equal(sessionCookie().name, "__Host-license-session");
+    assert.deepEqual(sessionCookie().options, { httpOnly: true, secure: true, sameSite: "strict", path: "/" });
+    process.env.APP_URL = "http://licenses.example.test";
+    assert.throws(sessionCookie, /HTTPS/);
+  } finally {
+    if (original === undefined) delete process.env.APP_URL; else process.env.APP_URL = original;
+  }
+});
+
+test("local provisioning creates private credentials and reset revokes old passwords and sessions", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "license-manager-auth-test-"));
+  const credentials = join(directory, ".admin-credentials");
+  const provision = () => spawnSync(process.execPath, [
+    "--conditions=react-server", "--import", import.meta.resolve("tsx"),
+    fileURLToPath(new URL("../scripts/setup-admin.ts", import.meta.url)), "cli-admin@example.test",
+  ], { cwd: directory, env: { ...process.env, TSX_TSCONFIG_PATH: fileURLToPath(new URL("../tsconfig.json", import.meta.url)) }, encoding: "utf8" });
+  try {
+    const first = provision();
+    assert.equal(first.status, 0, first.stderr);
+    const oldPassword = readFileSync(credentials, "utf8").split("Password: ")[1].trim();
+    assert.equal(statSync(credentials).mode & 0o777, 0o600);
+    assert.equal(first.stdout.includes(oldPassword), false);
+    const session = (await authenticateAdmin("cli-admin@example.test", oldPassword))!;
+    assert.ok(session);
+    assert.notEqual(provision().status, 0, "Existing credentials must not be overwritten");
+    unlinkSync(credentials);
+    const reset = provision();
+    assert.equal(reset.status, 0, reset.stderr);
+    assert.equal(await sessionActor(session.token), null);
+    assert.equal(await authenticateAdmin("cli-admin@example.test", oldPassword), null);
+    const newPassword = readFileSync(credentials, "utf8").split("Password: ")[1].trim();
+    assert.ok(await authenticateAdmin("cli-admin@example.test", newPassword));
+  } finally {
+    const user = await db.user.findUnique({ where: { email: "cli-admin@example.test" } });
+    if (user) await db.user.delete({ where: { id: user.id } });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("authenticated encryption is randomized and detects tampering", () => {
   const a = encryptKey("TEST-SECRET");
@@ -158,4 +286,80 @@ test("reports isolate currencies, aggregate seats, and prorate recorded terms", 
   assert.equal(report.vendorCosts[0].value, 120000);
   assert.equal((await statistics("USD")).annual, 900000);
   await deleteLicense(a.id, 1); await deleteLicense(b.id, 1);
+});
+
+test("CSV preview is read-only and hides keys; import encrypts, audits, and rejects retries", async () => {
+  const key = "CSV-SECRET-MUST-NOT-LEAK-76543";
+  const source = csvFixture([{ product_name: "CSV protected agreement", license_key: key, notes: 'A comma, a "quote"\nand a newline', vendor: "TEST VENDOR", owner_email: "ADMIN@EXAMPLE.TEST" }, { product_name: "CSV untracked agreement", seat_tracking: "false", currency: "usd", annual_cost: "0.29" }]);
+  const beforeCount = await db.license.count();
+  const beforeAudit = await db.auditLog.count();
+  const preview = await previewLicenseImport(source);
+  assert.equal(preview.rows.length, 2);
+  assert.equal(preview.rows[0].keyStored, true);
+  assert.equal(JSON.stringify(preview).includes(key), false);
+  assert.equal(await db.license.count(), beforeCount);
+  assert.equal(await db.auditLog.count(), beforeAudit);
+  assert.deepEqual(await importLicenses(source), { count: 2 });
+  const records = await db.license.findMany({ where: { productName: { startsWith: "CSV " } } });
+  const protectedRecord = records.find(record => record.productName === "CSV protected agreement")!;
+  assert.equal(decryptKey(protectedRecord.encryptedKey!), key);
+  assert.equal(protectedRecord.annualCostMinor, 120050);
+  assert.equal(protectedRecord.purchasedSeats, 1);
+  assert.equal(protectedRecord.notes, 'A comma, a "quote"\nand a newline');
+  assert.equal(records.find(record => record.productName === "CSV untracked agreement")!.annualCostMinor, 29);
+  const audit = await db.auditLog.findMany({ where: { licenseId: { in: records.map(record => record.id) } } });
+  assert.equal(audit.length, 2);
+  assert.ok(audit.every(event => event.action === "CREATED" && event.userId === "admin"));
+  assert.equal(JSON.stringify(audit).includes(key), false);
+  assert.equal(JSON.stringify(audit).includes(protectedRecord.encryptedKey!), false);
+  await assert.rejects(importLicenses(source), CsvImportError);
+  assert.equal(await db.license.count(), beforeCount + 2);
+  for (const record of records) await deleteLicense(record.id, 1);
+});
+
+test("CSV reports row errors and saves nothing when any row or relation is invalid", async () => {
+  const beforeCount = await db.license.count();
+  const beforeAudit = await db.auditLog.count();
+  const invalid = csvFixture([{}, { product_name: "Bad agreement", vendor: "Unknown vendor", owner_email: "missing@example.test", expiration_date: "2026-02-30", purchased_seats: "2", assigned_seats: "3", annual_cost: "1,000.00", currency: "INVALID" }]);
+  await assert.rejects(importLicenses(invalid), error => {
+    assert.ok(error instanceof CsvImportError);
+    for (const field of ["vendor", "owner_email", "expiration_date", "annual_cost", "currency"]) assert.ok(error.issues.some(issue => issue.row === 3 && issue.field === field), field);
+    return true;
+  });
+  await assert.rejects(importLicenses(csvFixture([{ purchased_seats: "2", assigned_seats: "3" }])), error => error instanceof CsvImportError && error.issues.some(issue => issue.field === "assigned_seats"));
+  await assert.rejects(importLicenses(csvFixture([{}, {}])), CsvImportError);
+  assert.equal(await db.license.count(), beforeCount);
+  assert.equal(await db.auditLog.count(), beforeAudit);
+});
+
+test("CSV import rolls back earlier rows and audit entries on a later write failure", async () => {
+  const beforeCount = await db.license.count();
+  const beforeAudit = await db.auditLog.count();
+  const original = process.env.LICENSE_ENCRYPTION_KEY;
+  try {
+    process.env.LICENSE_ENCRYPTION_KEY = "invalid";
+    await assert.rejects(importLicenses(csvFixture([{ product_name: "First row without a key" }, { product_name: "Later row with a key", license_key: "SYNTHETIC-KEY" }])), /LICENSE_ENCRYPTION_KEY/);
+  } finally { process.env.LICENSE_ENCRYPTION_KEY = original; }
+  assert.equal(await db.license.count(), beforeCount);
+  assert.equal(await db.auditLog.count(), beforeAudit);
+});
+
+test("CSV commit rechecks changed directory entries and concurrent duplicate submissions", async () => {
+  const vendor = await db.vendor.create({ data: { name: "Temporary CSV vendor" } });
+  const source = csvFixture([{ vendor: vendor.name }]);
+  await previewLicenseImport(source);
+  await db.vendor.delete({ where: { id: vendor.id } });
+  await assert.rejects(importLicenses(source), CsvImportError);
+  const duplicate = csvFixture([{ product_name: "Concurrent CSV agreement" }]);
+  const results = await Promise.allSettled([importLicenses(duplicate), importLicenses(duplicate)]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  const records = await db.license.findMany({ where: { productName: "Concurrent CSV agreement" } });
+  assert.equal(records.length, 1);
+  await deleteLicense(records[0].id, 1);
+});
+
+test("anonymous callers cannot preview or commit CSV imports", async () => {
+  setSessionToken(undefined);
+  await assert.rejects(previewLicenseImport(csvFixture([{}])), /NEXT_REDIRECT/);
+  await assert.rejects(importLicenses(csvFixture([{}])), /NEXT_REDIRECT/);
 });
