@@ -6,14 +6,15 @@ import { CURRENCIES, LICENSE_TYPES } from "@/lib/calculations";
 import { CsvImportError, parseLicenseCsv, type CsvIssue, type ImportPreview } from "@/lib/license-csv";
 import { insertLicense } from "@/services/licenses";
 import type { Prisma } from "@/generated/prisma/client";
+import { mappedLicenseCsv } from "@/lib/csv-mapping";
 
 const normalize = (value: string) => value.trim().toLowerCase();
-function identity(data: { productName: string; vendorId: string; departmentId: string; contractNumber: string }) {
+function identity(data: { productName: string; vendorId: string; departmentId: string | null; contractNumber: string }) {
   return JSON.stringify([normalize(data.productName), data.vendorId, data.departmentId, normalize(data.contractNumber)]);
 }
 
-async function prepare(source: string, client: Prisma.TransactionClient) {
-  const rows = parseLicenseCsv(source);
+async function prepare(source: string, client: Prisma.TransactionClient, options?: unknown) {
+  const rows = options === undefined ? parseLicenseCsv(source) : mappedLicenseCsv(source, options);
   const [vendors, departments, users] = await Promise.all([
     client.vendor.findMany({ select: { id: true, name: true } }),
     client.department.findMany({ select: { id: true, name: true } }),
@@ -85,17 +86,17 @@ async function prepare(source: string, client: Prisma.TransactionClient) {
   return prepared;
 }
 
-export async function previewLicenseImport(source: string): Promise<ImportPreview> {
+export async function previewLicenseImport(source: string, options?: unknown): Promise<ImportPreview> {
   await currentActor();
-  const prepared = await prepare(source, db);
-  return { rows: prepared.map(({ row, data, vendor, department, ownerEmail }) => ({ row, productName: data.productName, vendor, department, ownerEmail, licenseType: data.licenseType, expirationDate: data.expirationDate, annualCostMinor: data.annualCostMinor, currency: data.currency, purchasedSeats: data.purchasedSeats, assignedSeats: data.assignedSeats, keyStored: Boolean(data.licenseKey) })) };
+  const prepared = await prepare(source, db, options);
+  return { rows: prepared.map(({ row, data, vendor, department, ownerEmail }) => ({ row, productName: data.productName, vendor, department, ownerEmail, licenseType: data.licenseType, purchaseDate: data.purchaseDate, startDate: data.startDate, expirationDate: data.expirationDate, contractNumber: data.contractNumber, annualCostMinor: data.annualCostMinor, currency: data.currency, purchasedSeats: data.purchasedSeats, assignedSeats: data.assignedSeats, keyStored: Boolean(data.licenseKey) })) };
 }
 
-export async function importLicenses(source: string) {
+export async function importLicenses(source: string, options?: unknown) {
   const actor = await currentActor();
   return db.$transaction(async tx => {
     // Revalidate on commit: the preview and caller-supplied data are not trusted.
-    const prepared = await prepare(source, tx);
+    const prepared = await prepare(source, tx, options);
     for (const { data } of prepared) await insertLicense(tx, data, actor.id);
     return { count: prepared.length };
   }, { timeout: 30_000 });

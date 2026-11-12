@@ -20,12 +20,13 @@ export async function runNotificationJob(now = new Date(), channel: Notification
   const licenses = await db.license.findMany({ select: { id: true, productName: true, expirationDate: true, responsibleUserId: true } });
   let eligible = 0;
   for (const license of licenses) {
+    if (!license.expirationDate) continue;
     const days = daysRemaining(license.expirationDate, today);
     // The nearest reached threshold catches missed jobs without producing a burst of stale reminders.
     const threshold = days < 0 ? 0 : NOTIFICATION_THRESHOLDS.find(value => days <= value);
     if (threshold === undefined) continue;
     eligible++;
-    for (const userId of new Set([...admins.map(admin => admin.userId), license.responsibleUserId])) await channel.deliver({
+    for (const userId of new Set([...admins.map(admin => admin.userId), ...(license.responsibleUserId ? [license.responsibleUserId] : [])])) await channel.deliver({
       licenseId: license.id, userId, threshold, expirationDate: license.expirationDate,
       productName: license.productName,
       message: `${license.productName}: ${expirationLabel(days)}. ${days < 0 ? "Review this expired agreement." : "Review seats and renewal arrangements before " + license.expirationDate + "."}`,

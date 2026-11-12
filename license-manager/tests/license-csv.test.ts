@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CsvImportError, CSV_MAX_BYTES, parseLicenseCsv, licenseCsvTemplate } from "../src/lib/license-csv";
+import { CsvImportError, CSV_MAX_BYTES, parseLicenseCsv, licenseCsvTemplate, readCsv } from "../src/lib/license-csv";
 import { csvFixture } from "./csv-fixture";
 
 test("CSV supports BOM, CRLF, quotes, delimiters, Unicode, and multiline notes", () => {
@@ -29,12 +29,17 @@ test("CSV enforces file and record limits", () => {
   assert.equal(parseLicenseCsv(csvFixture(Array.from({ length: 500 }, () => ({})))).length, 500);
 });
 
-test("template uses current directory entries, has no keys, and escapes spreadsheet formulas", () => {
-  const template = licenseCsvTemplate({ vendor: 'Vendor, "Pro"', department: "IT", ownerEmail: "admin@example.test", today: "2026-11-12", currency: "EUR" });
-  const row = parseLicenseCsv(template)[0].values;
-  assert.equal(row.vendor, 'Vendor, "Pro"');
-  assert.equal(row.owner_email, "admin@example.test");
-  assert.equal(row.license_key, "");
-  const dangerous = licenseCsvTemplate({ vendor: '=HYPERLINK("https://example.test")', department: "IT", ownerEmail: "admin@example.test", today: "2026-11-12", currency: "EUR" });
-  assert.ok(parseLicenseCsv(dangerous)[0].values.vendor!.startsWith("'="));
+test("default Microsoft template has exact ordered headers, one fictional row, and Excel UTF-8 escaping", () => {
+  const template = licenseCsvTemplate();
+  const bytes = new TextEncoder().encode(template);
+  assert.deepEqual(Array.from(bytes.slice(0, 3)), [0xef, 0xbb, 0xbf]);
+  const expected = "Product name,Assigned licenses,Purchased quantity,Available licenses,Subscription status,Renewal or expiration date,Billing profile";
+  assert.equal(template.slice(1).split("\r\n")[0], expected);
+  assert.equal(template.split("\r\n").length, 3);
+  const parsed = readCsv(template);
+  assert.deepEqual(parsed.headers, expected.split(","));
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].cells[0], 'EXAMPLE ONLY - Fictional "Office, Demo" product');
+  assert.equal(parsed.rows[0].cells[6], "EXAMPLE ONLY - Fictional billing profile");
+  assert.ok(template.includes('""Office, Demo""'));
 });

@@ -59,8 +59,8 @@ export function LicenseForm({ initial, options, today, currency }: { initial?: I
         {field("responsibleUserId", "Responsible person *", <select className="field-input" id="responsibleUserId" name="responsibleUserId" defaultValue={initial?.responsibleUserId ?? ""} required><option value="" disabled>Select person</option>{options.users.map(user => <option key={user.id} value={user.id}>{user.name}</option>)}</select>)}
       </div></section>
       <section className="panel form-section"><div className="section-heading"><span>03</span><div><h2>Dates & renewal</h2><p>Expiration status is calculated automatically.</p></div></div><div className="form-grid">
-        {input("purchaseDate", "Purchase date *", initial?.purchaseDate ?? today, "date", true)}
-        {input("startDate", "Start date *", initial?.startDate ?? today, "date", true)}
+        {input("purchaseDate", "Purchase date *", initial ? initial.purchaseDate ?? "" : today, "date", true)}
+        {input("startDate", "Start date *", initial ? initial.startDate ?? "" : today, "date", true)}
         {input("expirationDate", "Expiration date *", initial?.expirationDate ?? "", "date", true)}
         {input("renewalDate", "Renewal date", initial?.renewalDate ?? "", "date")}
       </div><label className="checkbox-label mt-5"><input name="autoRenewal" type="checkbox" defaultChecked={initial?.autoRenewal ?? false} />This license renews automatically</label></section>

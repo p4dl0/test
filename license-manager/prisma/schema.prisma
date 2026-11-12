@@ -9,6 +9,13 @@ datasource db {
 
 model License {
   id                String   @id @default(cuid())
+  source String?
+  lastImportedAt DateTime?
+  microsoftProductKey String? @unique
+  microsoftAvailableSeats Int?
+  microsoftSubscriptionStatus String?
+  microsoftBillingProfile String?
+  microsoftRenewalDate String?
   productName       String
   vendorId          String
   vendor            Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
@@ -16,19 +23,19 @@ model License {
   encryptedKey      String?
   keySuffix         String?
   seatTracking      Boolean  @default(true)
-  purchasedSeats    Int      @default(1)
-  assignedSeats     Int      @default(0)
-  purchaseDate      String
-  startDate         String
-  expirationDate    String
+  purchasedSeats    Int?     @default(1)
+  assignedSeats     Int?     @default(0)
+  purchaseDate      String?
+  startDate         String?
+  expirationDate    String?
   renewalDate       String?
   autoRenewal       Boolean  @default(false)
-  annualCostMinor   Int      @default(0)
+  annualCostMinor   Int?     @default(0)
   currency          String   @default("EUR")
-  departmentId      String
-  department        Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  responsibleUserId String
-  responsibleUser   User     @relation(fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  departmentId      String?
+  department        Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  responsibleUserId String?
+  responsibleUser   User?    @relation(fields: [responsibleUserId], references: [id], onDelete: Restrict)
   supplier          String   @default("")
   contractNumber    String   @default("")
   notes             String   @default("")

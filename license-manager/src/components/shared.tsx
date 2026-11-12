@@ -9,9 +9,9 @@ export function StatusBadge({ status }: { status: LicenseStatus }) {
   return <span className={`status-badge status-${status.toLowerCase().replaceAll(" ", "-")}`}><span />{status}</span>;
 }
 export function ExpirationLabel({ days }: { days: number }) { return <span className={`expiration-label ${days < 0 ? "text-red" : days <= 30 ? "text-orange" : ""}`}>{expirationLabel(days)}</span>; }
-export function UtilizationBar({ purchased, assigned, tracked = true, showCounts = true }: { purchased: number; assigned: number; tracked?: boolean; showCounts?: boolean }) {
+export function UtilizationBar({ purchased, assigned, tracked = true, showCounts = true }: { purchased: number | null; assigned: number | null; tracked?: boolean; showCounts?: boolean }) {
   const percentage = utilization(purchased, assigned, tracked);
-  if (percentage === null) return <span className="muted text-xs">Not seat-based</span>;
+  if (percentage === null) return <span className="muted text-xs">{tracked ? "Seat quantities unknown" : "Not seat-based"}</span>;
   const tone = utilizationTone(purchased, assigned);
   return <div className={`utilization usage-${tone}`}><div className="usage-label">{showCounts && <span>{assigned}<span className="muted"> / {purchased} seats</span></span>}<strong>{percentage}%</strong></div><div className="progress-track" role="progressbar" aria-label="License utilization" aria-valuenow={percentage} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${Math.min(100, percentage)}%` }} /></div>{tone === "low" && <small>Potentially underutilized</small>}</div>;
 }

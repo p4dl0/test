@@ -142,21 +142,17 @@ Changing an expiration date marks old-cycle notifications read and allows remind
 
 ## Import licenses from CSV
 
-Open **Licenses → Import CSV**. Download the template, replace its example row, choose your file, and select **Preview CSV**. Review the records, then select **Import N licenses**. Only authenticated administrators can preview or import.
-
-Files must use UTF-8, comma or semicolon separators, and contain at most 500 licenses / 512 KiB. Quoted fields support delimiters, doubled quotes, and line breaks. Column names may use underscores or spaces, and matching ignores capitalization. Required columns:
+Open **Licenses → Import CSV → Download CSV template**. The default download is `license-import-template.csv`, encoded as UTF-8 with an Excel-compatible byte-order mark, CRLF line endings, and correctly quoted/escaped values. It contains exactly this header and one fictional row clearly marked **EXAMPLE ONLY**. Replace or remove the example for your real inventory.
 
 ```csv
-product_name,vendor,department,owner_email,license_type,purchase_date,start_date,expiration_date,annual_cost,currency
+Product name,Assigned licenses,Purchased quantity,Available licenses,Subscription status,Renewal or expiration date,Billing profile
 ```
 
-Vendor and department names must match existing directory entries; `owner_email` must match an existing person's email. The importer does not create directory entries or grant login access. Ambiguous names are rejected. Dates use `YYYY-MM-DD`. Annual cost uses ordinary currency units (for example `1200.50`), with no currency symbol or thousands separator and at most two decimals. License types and currencies use the same supported values as the manual form.
+Upload the downloaded template or a Microsoft **Billing → Your products** export using **Microsoft CSV import**. All seven column headings are required; additional source columns are ignored. Select the date format, then select **Preview Microsoft CSV**. The preview shows the seven values, row errors, and counts of new and existing products. Review the preview, check the licenses you want to add or update, then click **Save selected licenses**. Valid rows are selected by default; rows with errors cannot be selected. Saving revalidates the preview and writes only the selected rows in one database transaction. Use **View saved licenses** after saving to open your inventory.
 
-Optional columns: `license_key`, `seat_tracking`, `purchased_seats`, `assigned_seats`, `renewal_date`, `auto_renewal`, `supplier`, `contract_number`, `notes`. Blank seat tracking defaults to true; purchased seats default to 1, or 0 when tracking is disabled; assigned seats default to 0. Auto-renewal defaults to false, and other optional values remain empty. Booleans accept true/false, yes/no, or 1/0. The template uses current directory entries and contains no license keys. Spreadsheet formula prefixes in generated template values are escaped; if your actual directory name starts with such a character, ensure its CSV value matches the directory name when importing.
+Matching uses normalized, case-insensitive Product name within Microsoft licenses. Existing products receive only Microsoft-managed updates; department, responsible person, internal notes, cost, supplier, contract number, and other manual fields stay unchanged. Blank cells preserve existing values. Only Product name must be populated. Blank quantities and dates are stored as null for new products; existing values are preserved on update. Manual department, owner, purchase/start dates and costs stay null until entered manually. Each create/update appends an audit entry; repeated imports update rather than duplicate products.
 
-Preview makes no changes and shows only whether a license key was provided. Validation errors identify the CSV record number (header = row 1, including when a quoted field spans text lines) and field. Up to 100 errors are displayed at once. Fix all errors before importing. Agreements with the same product, vendor, department, and contract number, ignoring surrounding whitespace and capitalization, are rejected both within the file and against existing inventory. Import creates new records; use the normal edit form to update an existing agreement.
-
-The server validates the file again when saving. All licenses and their audit events commit in one transaction; a failure rolls back the entire file. Repeated or concurrent submissions cannot import the same agreement twice through this importer. Keys use the same encryption and audit redaction as manual entry, and uploaded files are not retained on disk.
+Files may use comma, semicolon, or tab delimiters, with UTF-8 or UTF-16 BOM encodings. The default template always uses UTF-8 and commas. Limits are 500 rows and 512 KiB. The advanced **Other CSV formats / template import** section remains available for custom mappings; its fields are not the default Microsoft template contract.
 
 ## Key protection and audit history
 
@@ -203,3 +199,16 @@ tests/                  Calculation, database, and browser tests
 ```
 
 `GET /api/search` searches license/product/vendor/department/owner context and returns safe summaries. `GET /api/health` checks database connectivity. All writes use Server Actions and server-only services; no mock API or browser-local persistence is used.
+
+
+### Dedicated Microsoft seven-column import
+
+The import page now includes a dedicated **Microsoft CSV import**. All seven headings are required: Product name, Assigned licenses, Purchased quantity, Available licenses, Subscription status, Renewal or expiration date, Billing profile. Other columns are ignored, including supplier, contract, notes, and prices. Comma, semicolon, tab, UTF-8 BOM, and UTF-16 BOM files use the existing reader. The dedicated path allows up to 1,024 columns while retaining file/row size limits.
+
+Preview shows all seven values, create/update decisions, row errors, and totals for detected/new/existing/invalid rows. Saving requires at least one selected valid row. Unselected rows are not saved, and rows with errors cannot be selected. Product names match after trimming, Unicode normalization, and case folding, within Microsoft vendor records or records already claimed by this importer. Duplicate names in a file and ambiguous existing matches are rejected. A nullable unique Microsoft product key prevents concurrent duplicate creation. Existing subscriptions with the same product name must be resolved manually if more than one exists.
+
+Updates explicitly write only the seven managed values, the internal matching key, and the concurrency version. Available licenses, subscription status, billing profile, and the Microsoft renewal date have dedicated nullable database fields. A nonblank renewal/expiration value updates the license expiration date; the manually maintained separate renewal-date field stays unchanged. Blank cells preserve existing values. Invalid nonblank quantities/dates reject the import. No availability is inferred or recalculated from the CSV quantities.
+
+New records allow blank quantities, dates and manual fields. No placeholder departments, current dates, or zero costs are inserted. The nullable-schema migration preserves existing rows and links. Unknown costs are excluded from financial totals/projections; missing expiry dates do not generate reminders. The generic importer continues to require its original fields. Microsoft imports store source=MICROSOFT_CSV and lastImportedAt, with MICROSOFT_CREATED/MICROSOFT_UPDATED audit events and changed field names. No existing internal fields are reset. Existing audit events are retained, and each create/update adds an audit event with managed before/after values. The server revalidates the preview token and current database versions inside the same transaction as every license and audit write; failures roll back the whole batch.
+
+Apply the additive migration with `npm run db:generate` and `npm run db:deploy`. It adds nullable fields and a unique index only; do not reset or reseed the database.

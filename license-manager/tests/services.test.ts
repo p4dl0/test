@@ -20,6 +20,7 @@ import { setSessionToken } from "./request-context";
 import { previewLicenseImport, importLicenses } from "../src/services/license-import";
 import { CsvImportError } from "../src/lib/license-csv";
 import { csvFixture } from "./csv-fixture";
+import { inspectLicenseCsv } from "../src/lib/csv-mapping";
 
 const password = "test-only-password-not-for-deployment";
 let adminToken: string;
@@ -362,4 +363,178 @@ test("anonymous callers cannot preview or commit CSV imports", async () => {
   setSessionToken(undefined);
   await assert.rejects(previewLicenseImport(csvFixture([{}])), /NEXT_REDIRECT/);
   await assert.rejects(importLicenses(csvFixture([{}])), /NEXT_REDIRECT/);
+});
+
+test("Microsoft products preview and import persist mapped quantities and distinct subscription IDs", async () => {
+  const source = 'Product name,Purchased quantity,Assigned licenses,Subscription ID,Subscription status,Renewal or expiration date,Purchase date,Unit price\nMicrosoft export test,10,4,ms-sub-one,Active,31/12/2028,12/11/2026,999\nMicrosoft export test,20,8,ms-sub-two,Active,31/12/2028,12/11/2026,999\n';
+  const config = { mapping: inspectLicenseCsv(source).mapping, defaults: { vendor: "Test vendor", department: "Test department", owner_email: "admin@example.test", license_type: "Subscription", start_date: "2026-11-12", annual_cost: "1200.50", currency: "EUR" }, dateOrder: "DMY" };
+  const count = await db.license.count();
+  const preview = await previewLicenseImport(source, config);
+  assert.equal(preview.rows.length, 2);
+  assert.equal(preview.rows[0].purchasedSeats, 10);
+  assert.equal(preview.rows[0].annualCostMinor, 120050);
+  assert.equal(await db.license.count(), count);
+  await assert.rejects(importLicenses(source, { ...config, defaults: { ...config.defaults, annual_cost: "" } }), CsvImportError);
+  assert.equal(await db.license.count(), count);
+  assert.deepEqual(await importLicenses(source, config), { count: 2 });
+  const records = await db.license.findMany({ where: { productName: "Microsoft export test" }, orderBy: { contractNumber: "asc" } });
+  assert.deepEqual(records.map(record => record.contractNumber), ["ms-sub-one", "ms-sub-two"]);
+  assert.deepEqual(records.map(record => [record.purchasedSeats, record.assignedSeats]), [[10, 4], [20, 8]]);
+  assert.equal(records[0].purchaseDate, "2026-11-12");
+  assert.equal(records[0].expirationDate, "2028-12-31");
+  await assert.rejects(importLicenses(source, config), CsvImportError);
+  for (const record of records) await deleteLicense(record.id, 1);
+  setSessionToken(undefined);
+  await assert.rejects(previewLicenseImport(source, config), /NEXT_REDIRECT/);
+  await assert.rejects(importLicenses(source, config), /NEXT_REDIRECT/);
+});
+
+
+test("dedicated seven-column Microsoft import upserts, preserves manual fields, validates and rolls back", async () => {
+  const { MICROSOFT_COLUMNS, previewMicrosoftImport, saveMicrosoftImport } = await import("../src/services/microsoft-import");
+  const options = { departmentId: "dept", dateOrder: "ISO" as const };
+  const source = (name: string, assigned = "4", purchased = "10", status = "Active", profile = "Corporate", date = "2028-12-31") => MICROSOFT_COLUMNS.join(",") + "," + Array.from({length: 120}, (_, i) => `Ignored ${i}`).join(",") + "\n" + [name, assigned, purchased, "6", status, date, profile, ...Array(120).fill("ignored")].join(",") + "\n";
+  const csv = source("MS dedicated product");
+  const first = await previewMicrosoftImport(csv, options);
+  assert.deepEqual([first.total, first.created, first.updated, first.invalid], [1, 1, 0, 0]);
+  const microsoftExport = csv.replace("Product name", "Product name (includes custom names)");
+  assert.deepEqual(await previewMicrosoftImport(microsoftExport, options), first);
+  await assert.rejects(previewMicrosoftImport(csv.replace("Product name,", "Product name,Product name (includes custom names),").replace("MS dedicated product,", "MS dedicated product,Conflicting product,"), options), /Correct the CSV errors/);
+  assert.equal(await db.license.count({ where: { productName: "MS dedicated product" } }), 0);
+  await saveMicrosoftImport(microsoftExport, options, first.token);
+  const record = await db.license.findFirstOrThrow({ where: { productName: "MS dedicated product" } });
+  await db.license.update({ where: { id: record.id }, data: { departmentId: "dept", responsibleUserId: "admin", notes: "Manual notes", annualCostMinor: 123456, supplier: "Manual supplier", contractNumber: "Manual contract", renewalDate: "2029-01-01" } });
+  const second = await previewMicrosoftImport(csv, options);
+  assert.deepEqual([second.created, second.updated], [0, 1]);
+  await saveMicrosoftImport(csv, options, second.token);
+  assert.equal(await db.license.count({ where: { productName: "MS dedicated product" } }), 1);
+  const changed = source("ms dedicated product", "8", "12");
+  const next = await previewMicrosoftImport(changed, options);
+  await saveMicrosoftImport(changed, options, next.token);
+  const after = await db.license.findUniqueOrThrow({ where: { id: record.id } });
+  assert.deepEqual([after.assignedSeats, after.purchasedSeats, after.microsoftAvailableSeats], [8, 12, 6]);
+  assert.deepEqual([after.notes, after.annualCostMinor, after.supplier, after.contractNumber, after.renewalDate, after.departmentId, after.responsibleUserId], ["Manual notes", 123456, "Manual supplier", "Manual contract", "2029-01-01", "dept", "admin"]);
+  assert.equal(after.microsoftBillingProfile, "Corporate");
+  const blank = source("MS dedicated product", "", "", "", "", "");
+  const blankPreview = await previewMicrosoftImport(blank, options);
+  await saveMicrosoftImport(blank, options, blankPreview.token);
+  assert.equal((await db.license.findUniqueOrThrow({where:{id:record.id}})).microsoftSubscriptionStatus, "Active");
+  const invalid = source("Bad MS product", "invalid", "1");
+  const bad = await previewMicrosoftImport(invalid, options);
+  assert.equal(bad.invalid, 1);
+  await assert.rejects(saveMicrosoftImport(invalid, options, bad.token));
+  await assert.rejects(previewMicrosoftImport("Product name\nMissing columns\n", options));
+  await assert.rejects(saveMicrosoftImport(csv, options, "forged-preview"));
+  const two = source("Rollback first") + source("Rollback second").split("\n")[1] + "\n";
+  const rollbackPreview = await previewMicrosoftImport(two, options);
+  await db.$executeRawUnsafe(`CREATE TRIGGER fail_ms_import BEFORE INSERT ON License WHEN NEW.productName = 'Rollback second' BEGIN SELECT RAISE(ABORT, 'test failure'); END`);
+  try { await assert.rejects(saveMicrosoftImport(two, options, rollbackPreview.token)); }
+  finally { await db.$executeRawUnsafe("DROP TRIGGER fail_ms_import"); }
+  assert.equal(await db.license.count({ where: { productName: { startsWith: "Rollback" } } }), 0);
+  const audits = await db.auditLog.findMany({ where: {licenseId: record.id} });
+  assert.ok(audits.some(event => event.action === "MICROSOFT_CREATED"));
+  assert.ok(audits.some(event => event.action === "MICROSOFT_UPDATED"));
+  assert.equal(await db.auditLog.count({ where: { productName: "Rollback first" } }), 0);
+  setSessionToken(undefined);
+  await assert.rejects(previewMicrosoftImport(csv, options), /NEXT_REDIRECT/);
+});
+
+
+test("Microsoft import saves only selected preview rows and rejects invalid selections", async () => {
+  const { MICROSOFT_COLUMNS, previewMicrosoftImport, saveMicrosoftImport } = await import("../src/services/microsoft-import");
+  const options = { dateOrder: "ISO" as const };
+  const csv = MICROSOFT_COLUMNS.join(",") + "\nSelected license,1,5,4,Active,,Corporate\nSkipped license,2,5,3,Active,,Corporate\nInvalid license,bad,5,3,Active,,Corporate\n";
+  const preview = await previewMicrosoftImport(csv, options);
+  assert.equal(preview.invalid, 1);
+  for (const selection of [[], [999], [2, 2], [2.5], [4], [2, 4]]) {
+    await assert.rejects(saveMicrosoftImport(csv, options, preview.token, selection));
+  }
+  assert.equal(await db.license.count({ where: { productName: "Selected license" } }), 0);
+  assert.deepEqual(await saveMicrosoftImport(csv, options, preview.token, [2]), { created: 1, updated: 0 });
+  assert.equal(await db.license.count({ where: { productName: { in: ["Skipped license", "Invalid license"] } } }), 0);
+  assert.equal(await db.auditLog.count({ where: { productName: { in: ["Skipped license", "Invalid license"] } } }), 0);
+  await assert.rejects(saveMicrosoftImport(csv, options, preview.token, [3]), /data changed/);
+  const next = await previewMicrosoftImport(csv, options);
+  assert.deepEqual(await saveMicrosoftImport(csv, options, next.token, [2, 3]), { created: 1, updated: 1 });
+  assert.equal(await db.license.count({ where: { productName: "Selected license" } }), 1);
+});
+
+test("downloadable Microsoft template imports and repeat import updates the same product", async () => {
+  const { licenseCsvTemplate } = await import("../src/lib/microsoft-csv");
+  const { readCsv } = await import("../src/lib/license-csv");
+  const { previewMicrosoftImport, saveMicrosoftImport } = await import("../src/services/microsoft-import");
+  const source = licenseCsvTemplate();
+  const name = readCsv(source).rows[0].cells[0];
+  const options = { departmentId: "dept", dateOrder: "ISO" as const };
+  const first = await previewMicrosoftImport(source, options);
+  assert.equal(first.invalid, 0);
+  await saveMicrosoftImport(source, options, first.token);
+  const second = await previewMicrosoftImport(source, options);
+  assert.deepEqual([second.created, second.updated], [0, 1]);
+  await saveMicrosoftImport(source, options, second.token);
+  const records = await db.license.findMany({ where: { productName: name } });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].microsoftBillingProfile, "EXAMPLE ONLY - Fictional billing profile");
+});
+
+test("Microsoft seven-column CSV permits empty quantities, dates, and all manual fields", async () => {
+  const { MICROSOFT_COLUMNS, previewMicrosoftImport, saveMicrosoftImport } = await import("../src/services/microsoft-import");
+  const { parseMicrosoftDate } = await import("../src/lib/microsoft-date");
+  const options = { dateOrder: "ISO" as const };
+  const csv = MICROSOFT_COLUMNS.join(",") + "\nMicrosoft null fields,,,,Disabled,,Billing A\n";
+  const preview = await previewMicrosoftImport(csv, options);
+  assert.equal(preview.invalid, 0);
+  await saveMicrosoftImport(csv, options, preview.token);
+  const record = await db.license.findFirstOrThrow({ where: { productName: "Microsoft null fields" } });
+  for (const field of ["purchasedSeats", "assignedSeats", "microsoftAvailableSeats", "expirationDate", "purchaseDate", "startDate", "annualCostMinor", "departmentId", "responsibleUserId"] as const) assert.equal(record[field], null, field);
+  assert.equal(record.source, "MICROSOFT_CSV");
+  assert.ok(record.lastImportedAt);
+  assert.equal(record.microsoftSubscriptionStatus, "Disabled");
+  assert.equal((await getLicense(record.id))?.status, "Unknown");
+  await statistics();
+  await generateNotifications();
+  assert.equal(await db.notification.count({where:{licenseId:record.id}}), 0);
+  const again = await previewMicrosoftImport(csv, options);
+  await saveMicrosoftImport(csv, options, again.token);
+  assert.equal(await db.license.count({where:{ productName: record.productName }}), 1);
+  for (const [value, order, expected] of [
+    ["", "ISO", null], ["2028-12-31", "ISO", "2028-12-31"],
+    ["31/12/2028 12:30 PM", "ISO", "2028-12-31"],
+    ["12/31/2028 12:30:00 AM", "ISO", "2028-12-31"],
+    ["11/12/2028", "DMY", "2028-12-11"], ["11/12/2028", "MDY", "2028-11-12"],
+    ["2028-12-31T23:00:00Z", "ISO", "2028-12-31"],
+    ["2028-12-31 23:00:00", "ISO", "2028-12-31"],
+  ] as const) assert.equal(parseMicrosoftDate(value, order), expected);
+  assert.throws(() => parseMicrosoftDate("11/12/2028", "ISO"), /Ambiguous/);
+  assert.throws(() => parseMicrosoftDate("31/02/2028", "DMY"), /Invalid/);
+  const bad = await previewMicrosoftImport(MICROSOFT_COLUMNS.join(",") + "\nInvalid MS,not-a-number,,,Active,,\n", options);
+  assert.equal(bad.invalid, 1);
+  await assert.rejects(saveMicrosoftImport(MICROSOFT_COLUMNS.join(",") + "\nInvalid MS,not-a-number,,,Active,,\n", options, bad.token));
+  const zero = await previewMicrosoftImport(MICROSOFT_COLUMNS.join(",") + "\nZero MS,0,0,0,Expired,,\n", options);
+  assert.equal(zero.invalid, 0);
+});
+
+test("nullable migration preserves existing license values and linked audit and notification records", async () => {
+  const { default: Database } = await import("better-sqlite3");
+  const { readdirSync } = await import("node:fs");
+  const database = new Database(":memory:");
+  const root = fileURLToPath(new URL("../prisma/migrations/", import.meta.url));
+  const names = readdirSync(root).filter(name => /^\d/.test(name)).sort();
+  try {
+    for (const name of names.filter(name => name !== "20261112180000_nullable_microsoft")) database.exec(readFileSync(join(root, name, "migration.sql"), "utf8"));
+    database.exec(`PRAGMA foreign_keys=ON;
+      INSERT INTO Vendor (id,name) VALUES ('v','Microsoft');
+      INSERT INTO Department (id,name) VALUES ('d','Department');
+      INSERT INTO User (id,name,email) VALUES ('u','Owner','owner@test.invalid');
+      INSERT INTO License (id,productName,vendorId,licenseType,purchaseDate,startDate,expirationDate,annualCostMinor,departmentId,responsibleUserId,updatedAt,notes) VALUES ('l','Existing','v','Subscription','2026-01-01','2026-01-01','2028-01-01',12345,'d','u',CURRENT_TIMESTAMP,'Keep me');
+      INSERT INTO AuditLog (id,licenseId,productName,action,userId) VALUES ('a','l','Existing','CREATED','u');
+      INSERT INTO Notification (id,licenseId,userId,productName,message,threshold,expirationDate,dedupeKey) VALUES ('n','l','u','Existing','Keep notification',7,'2028-01-01','dedupe');`);
+    const before = database.prepare("SELECT * FROM License").get();
+    database.exec(readFileSync(join(root, "20261112180000_nullable_microsoft/migration.sql"), "utf8"));
+    const after = database.prepare("SELECT * FROM License").get() as Record<string, unknown>;
+    assert.deepEqual(after, { ...(before as object), source: null, lastImportedAt: null });
+    assert.equal((database.prepare("SELECT licenseId FROM AuditLog").get() as {licenseId:string}).licenseId, "l");
+    assert.equal((database.prepare("SELECT licenseId FROM Notification").get() as {licenseId:string}).licenseId, "l");
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
 });

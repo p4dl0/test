@@ -10,7 +10,7 @@ try {
   const migration = spawnSync(process.execPath, ["node_modules/prisma/build/index.js", "migrate", "deploy"], { env, stdio: "inherit" });
   if (migration.status !== 0) process.exitCode = 1;
   else {
-    const test = spawnSync(process.execPath, ["--conditions=react-server", "--experimental-test-module-mocks", "--import=tsx", "--import=./tests/request-context.ts", "--test", "--test-concurrency=1", "tests/calculations.test.ts", "tests/license-csv.test.ts", "tests/services.test.ts"], { env, stdio: "inherit" });
+    const test = spawnSync(process.execPath, ["--conditions=react-server", "--experimental-test-module-mocks", "--import=tsx", "--import=./tests/request-context.ts", "--test", "--test-concurrency=1", "tests/calculations.test.ts", "tests/license-csv.test.ts", "tests/csv-mapping.test.ts", "tests/services.test.ts"], { env, stdio: "inherit" });
     process.exitCode = test.status ?? 1;
   }
 } finally {
