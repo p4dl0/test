@@ -1,0 +1,33 @@
+# Local configuration and generated credentials
+.env
+.env.*
+!.env.example
+.admin-credentials
+*.pem
+*.key
+
+# Databases, journals, and backups
+*.db
+*.db-*
+*.db.*
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.*
+*-journal
+*-wal
+*-shm
+
+# Dependencies, generated output, and temporary files
+node_modules/
+.next/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+tmp/
+temp/
+.DS_Store
