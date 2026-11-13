@@ -2,7 +2,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/actor";
 import { encryptKey, decryptKey } from "@/lib/security/keys";
-import { licenseSchema, type LicenseInput } from "@/lib/validation/license";
+import { licenseSchema, licenseEditSchema, licensePatchSchema, type LicenseInput } from "@/lib/validation/license";
 import { addDays, daysRemaining, licenseStatus, todayInTimezone, utilization } from "@/lib/calculations";
 import type { License, Prisma } from "@/generated/prisma/client";
 
@@ -35,13 +35,15 @@ export async function createLicense(input: unknown) {
 
 export async function updateLicense(id: string, expectedVersion: number, input: unknown) {
   const actor = await currentActor();
-  const data = licenseSchema.parse(input);
-  const { licenseKey, clearKey, ...fields } = data;
+  const patch = licensePatchSchema.parse(input);
   return db.$transaction(async tx => {
     const before = await tx.license.findUniqueOrThrow({ where: { id } });
     if (before.version !== expectedVersion) throw new Error("This license changed while you were editing. Reload and try again.");
+    const { licenseKey, clearKey, ...fields } = licenseEditSchema.parse({ ...before, ...patch });
+    // Write only submitted fields; untouched stored values must remain byte-for-byte intact.
+    const changedFields = Object.fromEntries(Object.entries(fields).filter(([name]) => Object.hasOwn(patch, name)));
     const keyData = clearKey ? { encryptedKey: null, keySuffix: null } : licenseKey ? { encryptedKey: encryptKey(licenseKey), keySuffix: licenseKey.slice(-5).padStart(5, "X") } : {};
-    const after = await tx.license.update({ where: { id, version: expectedVersion }, data: { ...fields, ...keyData, version: { increment: 1 } } });
+    const after = await tx.license.update({ where: { id, version: expectedVersion }, data: { ...changedFields, ...keyData, version: { increment: 1 } } });
     const events = [{ action: "EDITED", previousValue: snapshot(before), newValue: snapshot(after) }];
     if (before.expirationDate !== after.expirationDate) events.push({ action: "EXPIRATION_CHANGED", previousValue: { expirationDate: before.expirationDate }, newValue: { expirationDate: after.expirationDate } });
     if (before.purchasedSeats !== after.purchasedSeats || before.assignedSeats !== after.assignedSeats || before.seatTracking !== after.seatTracking) events.push({ action: "SEATS_CHANGED", previousValue: { purchasedSeats: before.purchasedSeats, assignedSeats: before.assignedSeats, seatTracking: before.seatTracking }, newValue: { purchasedSeats: after.purchasedSeats, assignedSeats: after.assignedSeats, seatTracking: after.seatTracking } });

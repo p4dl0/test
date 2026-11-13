@@ -538,3 +538,82 @@ test("nullable migration preserves existing license values and linked audit and 
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
 });
+
+async function importedNullableLicense(productName: string) {
+  const { MICROSOFT_COLUMNS, previewMicrosoftImport, saveMicrosoftImport } = await import("../src/services/microsoft-import");
+  const source = MICROSOFT_COLUMNS.join(",") + `\n${productName},,,,Disabled,,Billing A\n`;
+  const options = { dateOrder: "ISO" as const };
+  const preview = await previewMicrosoftImport(source, options);
+  await saveMicrosoftImport(source, options, preview.token);
+  return db.license.findFirstOrThrow({ where: { productName } });
+}
+
+test("notes-only edit of a nullable Microsoft license preserves every untouched database value", async () => {
+  const before = await importedNullableLicense("Nullable notes regression");
+  await updateLicense(before.id, before.version, { notes: "Administrator note" });
+  const after = await db.license.findUniqueOrThrow({ where: { id: before.id } });
+  assert.deepEqual({ ...after, notes: before.notes, version: before.version, updatedAt: before.updatedAt }, before);
+  assert.equal(after.notes, "Administrator note");
+  const events = await db.auditLog.findMany({ where: { licenseId: before.id } });
+  assert.equal(events.filter(event => event.action === "EDITED").length, 1);
+  assert.equal(events.some(event => ["COST_CHANGED", "SEATS_CHANGED", "EXPIRATION_CHANGED"].includes(event.action)), false);
+  await deleteLicense(before.id, after.version);
+});
+
+test("null annual cost stays null when editing department and responsible person", async () => {
+  const before = await importedNullableLicense("Nullable cost regression");
+  await updateLicense(before.id, before.version, { departmentId: "dept", responsibleUserId: "admin" });
+  const after = await db.license.findUniqueOrThrow({ where: { id: before.id } });
+  assert.equal(after.annualCostMinor, null);
+  assert.equal(after.departmentId, "dept");
+  assert.equal(after.responsibleUserId, "admin");
+  await deleteLicense(before.id, after.version);
+});
+
+test("null quantities stay null with tracking enabled or disabled and utilization stays unknown", async () => {
+  const before = await importedNullableLicense("Nullable seats regression");
+  for (const seatTracking of [true, false]) {
+    const current = await db.license.findUniqueOrThrow({ where: { id: before.id } });
+    await updateLicense(before.id, current.version, { notes: "Seat quantities unknown", seatTracking });
+    const after = await getLicense(before.id);
+    assert.equal(after?.purchasedSeats, null);
+    assert.equal(after?.assignedSeats, null);
+    assert.equal(after?.microsoftAvailableSeats, null);
+    assert.equal(after?.usage, null);
+  }
+  await deleteLicense(before.id, 3);
+});
+
+test("nullable dates stay null when an imported license is edited through the full form schema", async () => {
+  const { licenseEditSchema } = await import("../src/lib/validation/license");
+  const before = await importedNullableLicense("Nullable dates regression");
+  const form = licenseEditSchema.parse({ ...before, purchaseDate: "", startDate: "", expirationDate: "", renewalDate: "", departmentId: "", responsibleUserId: "", notes: "Full form edit" });
+  await updateLicense(before.id, before.version, form);
+  const after = await db.license.findUniqueOrThrow({ where: { id: before.id } });
+  for (const name of ["purchaseDate", "startDate", "expirationDate", "renewalDate", "annualCostMinor", "purchasedSeats", "assignedSeats"] as const) assert.equal(after[name], null, name);
+  await deleteLicense(before.id, after.version);
+});
+
+test("notes-only edit preserves existing known fields and the stored encrypted key", async () => {
+  const { id } = await createLicense(fixture);
+  const before = await db.license.findUniqueOrThrow({ where: { id } });
+  await updateLicense(id, before.version, { notes: "Only notes changed" });
+  const after = await db.license.findUniqueOrThrow({ where: { id } });
+  assert.deepEqual({ ...after, notes: before.notes, version: before.version, updatedAt: before.updatedAt }, before);
+  await deleteLicense(id, after.version);
+});
+
+test("edit relationships validate merged known values and skip missing counterparts", async () => {
+  const before = await importedNullableLicense("Nullable relationships regression");
+  await updateLicense(before.id, 1, { assignedSeats: 20, expirationDate: "2027-01-01" });
+  await assert.rejects(updateLicense(before.id, 2, { purchasedSeats: 10 }), /Assigned seats cannot exceed/);
+  await assert.rejects(updateLicense(before.id, 2, { startDate: "2028-01-01" }), /Expiration must be/);
+  await updateLicense(before.id, 2, { purchasedSeats: 20, startDate: "2027-01-01" });
+  await assert.rejects(updateLicense(before.id, 3, { purchasedSeats: 0 }), /Purchase at least one seat/);
+  await assert.rejects(updateLicense(before.id, 3, { seatTracking: false }), /Set seat counts to zero/);
+  await assert.rejects(updateLicense(before.id, 3, { assignedSeats: -1 }));
+  await assert.rejects(updateLicense(before.id, 3, { annualCostMinor: -1 }));
+  await assert.rejects(updateLicense(before.id, 3, { purchaseDate: "2027-02-30" }));
+  assert.equal((await getLicense(before.id))?.version, 3);
+  await deleteLicense(before.id, 3);
+});

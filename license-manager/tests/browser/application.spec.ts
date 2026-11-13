@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type BrowserContext, type Locator } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { csvFixture } from "../csv-fixture";
 
@@ -10,8 +10,34 @@ async function signIn(page: Page) {
   await expect(page).toHaveURL("/");
 }
 
+async function uploadMicrosoftCsv(page: Page, files: Parameters<Locator["setInputFiles"]>[0]) {
+  // A hard navigation can render the file input before React attaches its change handler.
+  await expect(async () => {
+    await page.getByLabel("Microsoft CSV file", { exact: true }).setInputFiles(files);
+    await expect(page.getByRole("button", { name: "Preview Microsoft CSV", exact: true })).toBeEnabled({ timeout: 500 });
+  }).toPass({ timeout: 10_000 });
+}
+
 test.describe("authenticated workspace", () => {
-  test.beforeEach(async ({ page }) => { await signIn(page); });
+  let cookies: Awaited<ReturnType<BrowserContext["cookies"]>>;
+  test.beforeAll(async ({ browser }) => {
+    const context = await browser.newContext();
+    try {
+      await signIn(await context.newPage());
+      cookies = await context.cookies();
+    } finally { await context.close(); }
+  });
+  test.beforeEach(async ({ context, page }) => {
+    await context.addCookies(cookies);
+    await page.goto("/");
+    // Warm the hydrated workspace before interacting with form controls.
+    await expect(async () => {
+      const search = page.getByRole("textbox", { name: "Global search" });
+      await search.fill("");
+      await search.fill("Visio");
+      await expect(page.locator(".search-results")).toBeVisible({ timeout: 500 });
+    }).toPass({ timeout: 10_000 });
+  });
 
 test("main pages, charts, global search, filtering, and responsive navigation", async ({ page }) => {
   const request = page.request;
@@ -63,17 +89,17 @@ test("create, validate, reveal, edit, duplicate, delete, and inspect retained au
   await page.getByLabel("Product name *", { exact: true }).fill(name);
   await page.getByLabel("Vendor *", { exact: true }).selectOption({ label: "Microsoft" });
   await page.getByLabel("License key or identifier", { exact: true }).fill(key);
-  await page.getByLabel("Purchased seats *", { exact: true }).fill("10");
-  await page.getByLabel("Assigned seats *", { exact: true }).fill("12");
-  await page.getByLabel("Department *", { exact: true }).selectOption({ label: "IT Operations" });
-  await page.getByLabel("Responsible person *", { exact: true }).selectOption({ label: "Alex Morgan" });
-  await page.getByLabel("Expiration date *", { exact: true }).fill("2028-12-31");
-  await page.getByLabel("Annual cost *", { exact: true }).fill("1200");
+  await page.getByLabel(/^Purchased seats(?: \*)?$/, { exact: true }).fill("10");
+  await page.getByLabel(/^Assigned seats(?: \*)?$/, { exact: true }).fill("12");
+  await page.getByLabel(/^Department(?: \*)?$/, { exact: true }).selectOption({ label: "IT Operations" });
+  await page.getByLabel(/^Responsible person(?: \*)?$/, { exact: true }).selectOption({ label: "Alex Morgan" });
+  await page.getByLabel(/^Expiration date(?: \*)?$/, { exact: true }).fill("2028-12-31");
+  await page.getByLabel(/^Annual cost(?: \*)?$/, { exact: true }).fill("1200");
   await page.getByLabel("Contract number", { exact: true }).fill("BROWSER-CONTRACT");
   await page.getByLabel("Notes", { exact: true }).fill("Browser-tested agreement.");
   await page.getByRole("button", { name: "Create license", exact: true }).click();
   await expect(page.getByText("Assigned seats cannot exceed purchased seats")).toBeVisible();
-  await page.getByLabel("Assigned seats *", { exact: true }).fill("7");
+  await page.getByLabel(/^Assigned seats(?: \*)?$/, { exact: true }).fill("7");
   await page.getByRole("button", { name: "Create license", exact: true }).click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   const originalURL = page.url();
@@ -85,9 +111,9 @@ test("create, validate, reveal, edit, duplicate, delete, and inspect retained au
   await page.getByRole("button", { name: "Hide", exact: true }).click();
   await expect(page.getByText(key, { exact: true })).toHaveCount(0);
   await page.getByRole("link", { name: "Edit license", exact: true }).click();
-  await page.getByLabel("Assigned seats *", { exact: true }).fill("9");
-  await page.getByLabel("Expiration date *", { exact: true }).fill("2029-12-31");
-  await page.getByLabel("Annual cost *", { exact: true }).fill("2400");
+  await page.getByLabel(/^Assigned seats(?: \*)?$/, { exact: true }).fill("9");
+  await page.getByLabel(/^Expiration date(?: \*)?$/, { exact: true }).fill("2029-12-31");
+  await page.getByLabel(/^Annual cost(?: \*)?$/, { exact: true }).fill("2400");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   await expect(page.getByText("90%", { exact: true })).toBeVisible();
@@ -208,16 +234,16 @@ test("Microsoft Your products export imports with detected columns, explicit def
   const records = await (await page.request.get(`/api/search?q=${encodeURIComponent(name)}`)).json();
   expect(records).toHaveLength(1);
   await page.goto(`/licenses/${records[0].id}/edit`);
-  await expect(page.getByLabel("Purchased seats *", { exact: true })).toHaveValue("10");
-  await expect(page.getByLabel("Assigned seats *", { exact: true })).toHaveValue("7");
-  await expect(page.getByLabel("Annual cost *", { exact: true })).toHaveValue("1300.5");
-  await expect(page.getByLabel("Expiration date *", { exact: true })).toHaveValue("2028-12-31");
+  await expect(page.getByLabel(/^Purchased seats(?: \*)?$/, { exact: true })).toHaveValue("10");
+  await expect(page.getByLabel(/^Assigned seats(?: \*)?$/, { exact: true })).toHaveValue("7");
+  await expect(page.getByLabel(/^Annual cost(?: \*)?$/, { exact: true })).toHaveValue("1300.5");
+  await expect(page.getByLabel(/^Expiration date(?: \*)?$/, { exact: true })).toHaveValue("2028-12-31");
 });
 
 test("Microsoft preview lets users review, select and save licenses to the system", async ({ page }) => {
   await page.goto("/licenses/import");
   const source = "Product name (includes custom names),Assigned licenses,Purchased quantity,Available licenses,Subscription status,Renewal or expiration date,Billing profile\nBrowser selected plan,2,5,3,Active,,Corporate\nBrowser skipped plan,0,10,10,Active,,Corporate\nBrowser invalid plan,bad,10,10,Active,,Corporate\n";
-  await page.getByLabel("Microsoft CSV file", { exact: true }).setInputFiles({ name: "selection.csv", mimeType: "text/csv", buffer: Buffer.from(source) });
+  await uploadMicrosoftCsv(page, { name: "selection.csv", mimeType: "text/csv", buffer: Buffer.from(source) });
   await page.getByRole("button", { name: "Preview Microsoft CSV", exact: true }).click();
   const selected = page.getByRole("checkbox", { name: "Save row 2: Browser selected plan", exact: true });
   const skipped = page.getByRole("checkbox", { name: "Save row 3: Browser skipped plan", exact: true });
@@ -240,6 +266,109 @@ test("Microsoft preview lets users review, select and save licenses to the syste
   await expect(page).toHaveURL("/licenses");
 });
 
+test("Microsoft nullable licenses support notes-only and ownership edits without fabricating values", async ({ page }) => {
+  const name = "Browser nullable editing regression";
+  await page.goto("/licenses/import");
+  const csv = "Product name,Assigned licenses,Purchased quantity,Available licenses,Subscription status,Renewal or expiration date,Billing profile\n" + name + ",,,,Disabled,,Browser billing\n";
+  await uploadMicrosoftCsv(page, { name: "nullable.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
+  await page.getByRole("button", { name: "Preview Microsoft CSV", exact: true }).click();
+  await page.getByRole("button", { name: "Save selected licenses", exact: true }).click();
+  await expect(page.getByText("Imported: 1 new products, 0 updated products.", { exact: true })).toBeVisible();
+  const [record] = await (await page.request.get(`/api/search?q=${encodeURIComponent(name)}`)).json();
+  const editURL = `/licenses/${record.id}/edit`;
+  const blankFields = ["annualCostMinor", "monthlyCost", "purchasedSeats", "assignedSeats", "purchaseDate", "startDate", "expirationDate", "renewalDate", "departmentId", "responsibleUserId"];
+  await page.goto(editURL);
+  for (const field of blankFields) await expect(page.locator(`#${field}`)).toHaveValue("");
+  await page.getByLabel("Notes", { exact: true }).fill("Only notes changed on an imported license.");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page).toHaveURL(`/licenses/${record.id}`);
+  await page.goto(editURL);
+  await expect(page.getByLabel("Notes", { exact: true })).toHaveValue("Only notes changed on an imported license.");
+  for (const field of blankFields) await expect(page.locator(`#${field}`)).toHaveValue("");
+  // Clearing either cost control must keep both representations unknown.
+  await page.locator("#annualCostMinor").fill("1200");
+  await page.locator("#annualCostMinor").fill("");
+  await expect(page.locator("#monthlyCost")).toHaveValue("");
+  await page.locator("#monthlyCost").fill("100");
+  await page.locator("#monthlyCost").fill("");
+  await expect(page.locator("#annualCostMinor")).toHaveValue("");
+  await page.locator("#departmentId").selectOption({ label: "IT Operations" });
+  await page.locator("#responsibleUserId").selectOption({ label: "Alex Morgan" });
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page).toHaveURL(`/licenses/${record.id}`);
+  await page.goto(editURL);
+  for (const field of blankFields.filter(field => !["departmentId", "responsibleUserId"].includes(field))) await expect(page.locator(`#${field}`)).toHaveValue("");
+  await expect(page.locator("#departmentId option:checked")).toHaveText("IT Operations");
+  await expect(page.locator("#responsibleUserId option:checked")).toHaveText("Alex Morgan");
+});
+
+for (const quantities of ["default", "nonzero"] as const) {
+  test(`creating a license with ${quantities} quantities permits disabling seat tracking`, async ({ page }) => {
+    const name = `Browser tracking create ${quantities}`;
+    await page.goto("/licenses/new");
+    await page.locator("#productName").fill(name);
+    await page.locator("#vendorId").selectOption({ label: "Microsoft" });
+    await page.locator("#departmentId").selectOption({ label: "IT Operations" });
+    await page.locator("#responsibleUserId").selectOption({ label: "Alex Morgan" });
+    await page.locator("#expirationDate").fill("2028-12-31");
+    await page.locator("#annualCostMinor").fill("1200");
+    if (quantities === "nonzero") {
+      await page.locator("#purchasedSeats").fill("10");
+      await page.locator("#assignedSeats").fill("7");
+    } else {
+      await expect(page.locator("#purchasedSeats")).toHaveValue("1");
+      await expect(page.locator("#assignedSeats")).toHaveValue("0");
+    }
+    await page.getByRole("checkbox", { name: "Track purchased and assigned seats", exact: true }).uncheck();
+    await page.getByRole("button", { name: "Create license", exact: true }).click();
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    await page.goto(`${page.url()}/edit`);
+    await expect(page.getByRole("checkbox", { name: "Track purchased and assigned seats", exact: true })).not.toBeChecked();
+    await expect(page.locator("#purchasedSeats")).toHaveValue("0");
+    await expect(page.locator("#assignedSeats")).toHaveValue("0");
+  });
+}
+
+for (const scenario of [
+  { name: "known", purchased: "10", assigned: "7", expectedPurchased: "0", expectedAssigned: "0" },
+  { name: "unknown", purchased: "", assigned: "", expectedPurchased: "", expectedAssigned: "" },
+  { name: "mixed", purchased: "", assigned: "7", expectedPurchased: "", expectedAssigned: "0" },
+  { name: "re-enabled unknown", purchased: "", assigned: "", expectedPurchased: "", expectedAssigned: "" },
+]) {
+  test(`editing ${scenario.name} quantities supports toggling tracking without touching seat inputs`, async ({ page }) => {
+    const name = `Browser tracking edit ${scenario.name}`;
+    const csv = "Product name,Assigned licenses,Purchased quantity,Available licenses,Subscription status,Renewal or expiration date,Billing profile\n" + `${name},${scenario.assigned},${scenario.purchased},,Active,,Tracking regression\n`;
+    await page.goto("/licenses/import");
+    await uploadMicrosoftCsv(page, { name: "tracking.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
+    await page.getByRole("button", { name: "Preview Microsoft CSV", exact: true }).click();
+    await page.getByRole("button", { name: "Save selected licenses", exact: true }).click();
+    await expect(page.getByText("Imported: 1 new products, 0 updated products.", { exact: true })).toBeVisible();
+    const [record] = await (await page.request.get(`/api/search?q=${encodeURIComponent(name)}`)).json();
+    const editURL = `/licenses/${record.id}/edit`;
+    await page.goto(editURL);
+    await expect(page.locator("#purchasedSeats")).toHaveValue(scenario.purchased);
+    await expect(page.locator("#assignedSeats")).toHaveValue(scenario.assigned);
+    const tracking = page.getByRole("checkbox", { name: "Track purchased and assigned seats", exact: true });
+    await tracking.uncheck();
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(page).toHaveURL(`/licenses/${record.id}`);
+    await page.goto(editURL);
+    await expect(tracking).not.toBeChecked();
+    if (scenario.name === "re-enabled unknown") {
+      await tracking.check();
+      await page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await expect(page).toHaveURL(`/licenses/${record.id}`);
+      await page.goto(editURL);
+      await expect(tracking).toBeChecked();
+    }
+    await expect(page.locator("#purchasedSeats")).toHaveValue(scenario.expectedPurchased);
+    await expect(page.locator("#assignedSeats")).toHaveValue(scenario.expectedAssigned);
+    for (const field of ["annualCostMinor", "purchaseDate", "startDate", "expirationDate", "departmentId", "responsibleUserId"]) {
+      await expect(page.locator(`#${field}`)).toHaveValue("");
+    }
+  });
+}
+
 test("default Microsoft template downloads, imports twice without duplicates, and accepts extra columns", async ({ page }) => {
   await page.goto("/licenses/import");
   const downloading = page.waitForEvent("download");
@@ -252,7 +381,7 @@ test("default Microsoft template downloads, imports twice without duplicates, an
   expect(text.slice(1).split("\r\n")[0]).toBe(header);
   expect(Array.from(buffer.subarray(0, 3))).toEqual([239, 187, 191]);
   for (let attempt = 0; attempt < 2; attempt++) {
-    await page.getByLabel("Microsoft CSV file", { exact: true }).setInputFiles({ name: "license-import-template.csv", mimeType: "text/csv", buffer });
+    await uploadMicrosoftCsv(page, { name: "license-import-template.csv", mimeType: "text/csv", buffer });
     await page.getByRole("button", { name: "Preview Microsoft CSV", exact: true }).click();
     await expect(page.getByText(`Rows detected: 1 · New products: ${attempt ? 0 : 1} · Existing products to update: ${attempt ? 1 : 0} · Skipped rows: 0 · Rows with errors: 0`, { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Save selected licenses", exact: true }).click();
@@ -260,13 +389,13 @@ test("default Microsoft template downloads, imports twice without duplicates, an
   }
   const lines = text.slice(1).trimEnd().split("\r\n");
   const extra = lines[0] + ",Internal notes,Unit price\r\n" + lines[1] + ",DO NOT IMPORT,99999\r\n";
-  await page.getByLabel("Microsoft CSV file", { exact: true }).setInputFiles({ name: "with-extra-columns.csv", mimeType: "text/csv", buffer: Buffer.from(extra) });
+  await uploadMicrosoftCsv(page, { name: "with-extra-columns.csv", mimeType: "text/csv", buffer: Buffer.from(extra) });
   await page.getByRole("button", { name: "Preview Microsoft CSV", exact: true }).click();
   await expect(page.getByText("Rows detected: 1 · New products: 0 · Existing products to update: 1 · Skipped rows: 0 · Rows with errors: 0", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save selected licenses", exact: true }).click();
   await expect(page.getByText("Imported: 0 new products, 1 updated products.", { exact: true })).toBeVisible();
   const minimal = "Product name,Assigned licenses,Purchased quantity,Available licenses,Subscription status,Renewal or expiration date,Billing profile\nMicrosoft incomplete product,,,,Disabled,,\n";
-  await page.getByLabel("Microsoft CSV file", { exact: true }).setInputFiles({ name: "minimal.csv", mimeType: "text/csv", buffer: Buffer.from(minimal) });
+  await uploadMicrosoftCsv(page, { name: "minimal.csv", mimeType: "text/csv", buffer: Buffer.from(minimal) });
   await page.getByRole("button", { name: "Preview Microsoft CSV", exact: true }).click();
   await expect(page.getByText("Rows detected: 1 · New products: 1 · Existing products to update: 0 · Skipped rows: 0 · Rows with errors: 0", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Department for new products", { exact: true })).toHaveCount(0);

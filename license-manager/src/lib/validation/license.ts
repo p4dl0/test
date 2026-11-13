@@ -8,7 +8,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date").refine(
 const optionalDate = z.union([date, z.literal(""), z.null()]).transform(value => value || null);
 const text = (max: number) => z.string().trim().max(max);
 
-export const licenseSchema = z.object({
+const licenseFields = z.object({
   productName: text(160).min(2, "Enter a product name"),
   vendorId: z.string().min(1, "Select a vendor"),
   licenseType: z.enum(LICENSE_TYPES),
@@ -29,13 +29,30 @@ export const licenseSchema = z.object({
   supplier: text(200),
   contractNumber: text(120),
   notes: text(5000),
-}).superRefine((value, ctx) => {
-  if (value.seatTracking && value.purchasedSeats < 1) ctx.addIssue({ code: "custom", path: ["purchasedSeats"], message: "Purchase at least one seat when tracking seats" });
-  if (value.assignedSeats > value.purchasedSeats) ctx.addIssue({ code: "custom", path: ["assignedSeats"], message: "Assigned seats cannot exceed purchased seats" });
-  if (!value.seatTracking && (value.purchasedSeats !== 0 || value.assignedSeats !== 0)) ctx.addIssue({ code: "custom", path: ["purchasedSeats"], message: "Set seat counts to zero when seat tracking is disabled" });
-  if (value.expirationDate < value.startDate) ctx.addIssue({ code: "custom", path: ["expirationDate"], message: "Expiration must be on or after the start date" });
-  if (value.clearKey && value.licenseKey) ctx.addIssue({ code: "custom", path: ["licenseKey"], message: "Choose a new key or clear the existing key" });
 });
+
+const editFields = licenseFields.extend({
+  purchasedSeats: licenseFields.shape.purchasedSeats.nullable(),
+  assignedSeats: licenseFields.shape.assignedSeats.nullable(),
+  annualCostMinor: licenseFields.shape.annualCostMinor.nullable(),
+  purchaseDate: optionalDate,
+  startDate: optionalDate,
+  expirationDate: optionalDate,
+  departmentId: z.union([licenseFields.shape.departmentId, z.literal(""), z.null()]).transform(value => value || null),
+  responsibleUserId: z.union([licenseFields.shape.responsibleUserId, z.literal(""), z.null()]).transform(value => value || null),
+});
+
+function relationships(value: z.infer<typeof editFields>, ctx: z.RefinementCtx) {
+  if (value.seatTracking && value.purchasedSeats !== null && value.purchasedSeats < 1) ctx.addIssue({ code: "custom", path: ["purchasedSeats"], message: "Purchase at least one seat when tracking seats" });
+  if (value.assignedSeats !== null && value.purchasedSeats !== null && value.assignedSeats > value.purchasedSeats) ctx.addIssue({ code: "custom", path: ["assignedSeats"], message: "Assigned seats cannot exceed purchased seats" });
+  if (!value.seatTracking && ((value.purchasedSeats !== null && value.purchasedSeats !== 0) || (value.assignedSeats !== null && value.assignedSeats !== 0))) ctx.addIssue({ code: "custom", path: ["purchasedSeats"], message: "Set seat counts to zero when seat tracking is disabled" });
+  if (value.expirationDate !== null && value.startDate !== null && value.expirationDate < value.startDate) ctx.addIssue({ code: "custom", path: ["expirationDate"], message: "Expiration must be on or after the start date" });
+  if (value.clearKey && value.licenseKey) ctx.addIssue({ code: "custom", path: ["licenseKey"], message: "Choose a new key or clear the existing key" });
+}
+
+export const licenseSchema = licenseFields.superRefine(relationships);
+export const licenseEditSchema = editFields.superRefine(relationships);
+export const licensePatchSchema = editFields.partial();
 export type LicenseInput = z.infer<typeof licenseSchema>;
 
 export const vendorSchema = z.object({
